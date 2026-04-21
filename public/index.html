@@ -904,7 +904,24 @@ function HomeScreen({ onCapture, onOpenJournal, onOpenMap, onSelectEntry, recent
   const initCamera = React.useCallback(async () => {
     setCameraErr(null);
     try {
-      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API not available');
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API not available on this browser');
+
+      // Pre-flight: if the Permissions API knows the state, give a better
+      // error up-front than a 10s timeout. Chrome/Edge/Firefox support it;
+      // Safari silently throws and we fall through to getUserMedia.
+      if (navigator.permissions?.query) {
+        try {
+          const status = await navigator.permissions.query({ name: 'camera' });
+          if (status.state === 'denied') {
+            throw new Error('Camera permission denied. Enable it for this site in your browser settings.');
+          }
+        } catch (e) {
+          // Safari and some older browsers reject the query — that's fine,
+          // getUserMedia will prompt directly.
+          if (e.message?.startsWith('Camera permission denied')) throw e;
+        }
+      }
+
       // First start — establishes permission. Until the user grants camera
       // access, enumerateDevices returns entries with empty deviceId strings.
       await startStream(null);
