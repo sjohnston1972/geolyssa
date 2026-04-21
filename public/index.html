@@ -882,7 +882,18 @@ function HomeScreen({ onCapture, onOpenJournal, onOpenMap, onSelectEntry, recent
       ? { video: { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }
       : { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
 
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    // Race getUserMedia against a timeout. On some mobile browsers the
+    // call hangs indefinitely (camera held by another app, permission in
+    // an ambiguous "dismissed" state, mid-prompt tab switch). A hard
+    // timeout surfaces this as an actionable error rather than the UI
+    // sitting forever on "Starting camera…".
+    const stream = await Promise.race([
+      navigator.mediaDevices.getUserMedia(constraints),
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error("Camera didn't respond in 10s — close other camera apps and retry")),
+        10000
+      )),
+    ]);
     streamRef.current = stream;
     if (videoRef.current) {
       videoRef.current.srcObject = stream;
