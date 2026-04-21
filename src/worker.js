@@ -679,9 +679,10 @@ async function mindat(request) {
   return new Response(JSON.stringify(result || null), {
     headers: {
       'content-type': 'application/json; charset=utf-8',
-      // Same mineral name from multiple users → same answer. Cache for an
-      // hour at the edge, browser doesn't re-request on back/forward nav.
-      'cache-control': 'public, max-age=3600',
+      // No cache — scraper quirks mean early nulls shouldn't pin for an
+      // hour. Worker calls are fast (~200ms), so re-fetching on demand is
+      // fine.
+      'cache-control': 'no-store',
     },
   });
 }

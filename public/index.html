@@ -1565,7 +1565,7 @@ function useMindatLookup(name, enabled) {
     (async () => {
       setState({ loading: true, data: null, error: null });
       try {
-        const res = await fetch(`/api/mindat?name=${encodeURIComponent(name)}`);
+        const res = await fetch(`/api/mindat?name=${encodeURIComponent(name)}`, { cache: 'no-store' });
         if (!res.ok) throw new Error(`Mindat lookup failed (${res.status})`);
         const data = await res.json();
         if (cancelled) return;
