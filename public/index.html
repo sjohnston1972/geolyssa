@@ -878,22 +878,46 @@ function HomeScreen({ onCapture, onOpenJournal, onOpenMap, onSelectEntry, recent
     }
     setCameraReady(false);
 
-    const constraints = deviceId
-      ? { video: { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }
-      : { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
+    // Progressive fallback. Some Android browsers (Huawei's built-in
+    // browser in particular) silently hang on complex constraint sets
+    // like `facingMode + width + height`. We try the richest constraints
+    // first, then degrade to `facingMode` only, then the bare minimum.
+    // Each attempt is capped at 6s — total worst case ~18s before giving
+    // up, though the first usually wins.
+    const attempts = deviceId ? [
+      { video: { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+      { video: { deviceId: { exact: deviceId } }, audio: false },
+      { video: true, audio: false },
+    ] : [
+      { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+      { video: { facingMode: 'environment' }, audio: false },
+      { video: true, audio: false },
+    ];
 
-    // Race getUserMedia against a timeout. On some mobile browsers the
-    // call hangs indefinitely (camera held by another app, permission in
-    // an ambiguous "dismissed" state, mid-prompt tab switch). A hard
-    // timeout surfaces this as an actionable error rather than the UI
-    // sitting forever on "Starting camera…".
-    const stream = await Promise.race([
+    const tryOne = (constraints, timeoutMs) => Promise.race([
       navigator.mediaDevices.getUserMedia(constraints),
       new Promise((_, reject) => setTimeout(
-        () => reject(new Error("Camera didn't respond in 10s — close other camera apps and retry")),
-        10000
+        () => reject(new Error(`timeout@${timeoutMs/1000}s`)),
+        timeoutMs
       )),
     ]);
+
+    let stream = null;
+    const failures = [];
+    for (let i = 0; i < attempts.length; i++) {
+      try {
+        stream = await tryOne(attempts[i], 6000);
+        if (i > 0) console.warn('[camera] fell back to attempt', i, attempts[i]);
+        break;
+      } catch (e) {
+        failures.push(`${e.name || 'err'}:${e.message}`);
+      }
+    }
+    if (!stream) {
+      throw new Error(
+        `Camera wouldn't open (${failures.length} attempts). Last: ${failures[failures.length - 1]}`
+      );
+    }
     streamRef.current = stream;
     if (videoRef.current) {
       videoRef.current.srcObject = stream;
