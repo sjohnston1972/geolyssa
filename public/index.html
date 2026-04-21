@@ -975,7 +975,16 @@ function HomeScreen({ onCapture, onOpenJournal, onOpenMap, onSelectEntry, recent
 
       // First start — establishes permission. Until the user grants camera
       // access, enumerateDevices returns entries with empty deviceId strings.
-      await startStream(null);
+      // Fallback flag is set ONLY if this specific call fails, not if a
+      // later step (enumerate, switch) trips — those would leave the
+      // working stream intact while pessimistically flipping future loads
+      // to file-mode. Symmetric failure/success semantics matter here.
+      try {
+        await startStream(null);
+      } catch (streamErr) {
+        setCameraFallback(true);
+        throw streamErr;
+      }
 
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoIns = devices.filter(d => d.kind === 'videoinput');
@@ -1013,20 +1022,24 @@ function HomeScreen({ onCapture, onOpenJournal, onOpenMap, onSelectEntry, recent
       // Live camera worked — clear any past fallback flag.
       setCameraFallback(false);
     } catch (e) {
-      setCameraFallback(true);
+      // Don't flip fallback flag here — only the inner startStream catch
+      // does that. A failure in enumerate/switch still leaves us with a
+      // working stream; we just surface the error without pessimising
+      // future loads.
       setCameraErr(e.message || 'Camera unavailable');
     }
   }, [startStream]);
 
   React.useEffect(() => {
     let cancelled = false;
+    // Always try live camera. If we've seen it fail before, show the
+    // fallback UI IMMEDIATELY (so the user isn't staring at a spinner)
+    // and keep trying in the background — if it succeeds, the UI upgrades
+    // itself via setCameraErr(null) inside initCamera.
     if (cameraInFallbackMode()) {
-      // Skip the live-camera dance entirely on browsers we've seen fail before.
-      // Sets cameraErr so the UI renders the tap-to-shoot affordance.
       setCameraErr('Using phone camera — tap the capture button to take a photo.');
-    } else {
-      initCamera().then(() => { if (cancelled) {/* no-op */} });
     }
+    initCamera().then(() => { if (cancelled) {/* no-op */} });
     return () => {
       cancelled = true;
       if (streamRef.current) {
