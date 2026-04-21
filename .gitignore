@@ -1,0 +1,17 @@
+# secrets
+.env
+.env.*
+!.env.example
+
+# derived artefacts
+build/
+node_modules/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# editor state
+.vscode/
+.idea/
+*.swp

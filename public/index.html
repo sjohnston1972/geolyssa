@@ -1,0 +1,3112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+<meta name="theme-color" content="#EFEAE2" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="description" content="Geolyssa — a pocket geologist. Identify rocks, minerals and fossils from a photo." />
+<title>Geolyssa — a pocket geologist</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior: none;
+  }
+  body {
+    background: #EFEAE2;
+    font-family: 'Inter', system-ui, sans-serif;
+    color: #2B2720;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  #root { width: 100%; height: 100%; position: relative; }
+  button { font-family: inherit; border: none; background: none; padding: 0; cursor: pointer; }
+  input, textarea, select { font-family: inherit; }
+  @keyframes spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+  @keyframes radarPulse { 0% { transform: scale(0.2); opacity: 0.9; } 100% { transform: scale(1); opacity: 0; } }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes slideUp { from { transform: translateY(12px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+
+  ::-webkit-scrollbar { width: 0; height: 0; }
+</style>
+<script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"></script>
+<script>
+  // On-device console overlay. Enable with ?debug=1.
+  (function () {
+    try {
+      var url = new URL(window.location.href);
+      var wantsDebug = url.searchParams.has('debug') || sessionStorage.getItem('geolyssa_debug') === '1';
+      if (url.searchParams.has('debug')) sessionStorage.setItem('geolyssa_debug', '1');
+      if (url.searchParams.get('debug') === 'off') { sessionStorage.removeItem('geolyssa_debug'); return; }
+      if (!wantsDebug) return;
+      var s = document.createElement('script');
+      s.src = 'https://cdn.jsdelivr.net/npm/eruda@3.4.1/eruda.min.js';
+      s.onload = function () { try { window.eruda && window.eruda.init(); } catch (e) {} };
+      document.head.appendChild(s);
+    } catch (e) {}
+  })();
+</script>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- ============================================================
+     THEME — Stratum palette (warm stone + sienna)
+     ============================================================ -->
+<script type="text/babel">
+const THEME = {
+  name: 'Stratum',
+  bg: '#EFEAE2',
+  bgDeep: '#E5DECE',
+  surface: '#FFFFFF',
+  surfaceAlt: '#F7F2E8',
+  ink: '#2B2720',
+  inkMuted: '#7A6E5D',
+  accent: '#8C5A3A',       // sienna — igneous warmth
+  accentDeep: '#5C3820',   // deep umber
+  accentSoft: '#E8D6C2',   // warm sand
+  accentGlow: '#D9B896',   // golden sand
+  warm: '#C97A2B',
+  danger: '#B83A2E',
+  radius: 28,
+  radiusSm: 18,
+  radiusTight: 12,
+  shadow: '0 8px 24px rgba(92,56,32,0.08), 0 2px 6px rgba(92,56,32,0.04)',
+  shadowLg: '0 20px 50px rgba(92,56,32,0.14)',
+};
+
+const FONTS = {
+  heading: "'Fraunces', Georgia, serif",
+  body: "'Inter', -apple-system, system-ui, sans-serif",
+  mono: "'JetBrains Mono', ui-monospace, monospace",
+};
+
+// Per-rock-type visual identity
+const ROCK_TYPE_PALETTE = {
+  igneous:     { a: '#3a2a24', b: '#6a4a3a', c: '#a88a6a', label: 'Igneous',     emoji: '🌋' },
+  sedimentary: { a: '#b89866', b: '#d4b687', c: '#ecd8b4', label: 'Sedimentary', emoji: '🪨' },
+  metamorphic: { a: '#4a4658', b: '#6f6b82', c: '#b0acc0', label: 'Metamorphic', emoji: '💠' },
+  mineral:     { a: '#6b3a6b', b: '#a65ba6', c: '#e5b6e5', label: 'Mineral',     emoji: '💎' },
+  meteorite:   { a: '#1a1a1a', b: '#3a3a3a', c: '#7a7a7a', label: 'Meteorite',   emoji: '☄' },
+  fossil:      { a: '#5a4a2a', b: '#8a7448', c: '#c9b47a', label: 'Fossil',      emoji: '🦴' },
+  other:       { a: '#5c5248', b: '#8a7f73', c: '#b8aea0', label: 'Other',       emoji: '🪨' },
+};
+
+function paletteFor(rockType) {
+  return ROCK_TYPE_PALETTE[rockType] || ROCK_TYPE_PALETTE.other;
+}
+
+const ROCK_TYPE_LABEL = Object.fromEntries(
+  Object.entries(ROCK_TYPE_PALETTE).map(([k, v]) => [k, v.label])
+);
+</script>
+
+<!-- ============================================================
+     DATA — Seed rocks (fallback + scan animation priming)
+     ============================================================ -->
+<script type="text/babel">
+const ROCKS = [
+  {
+    id: 'basalt',
+    name: 'Basalt',
+    scientific: 'Mafic extrusive igneous',
+    rock_type: 'igneous',
+    tagline: 'Fine-grained volcanic rock from fast-cooled lava.',
+    formation: 'Rapid cooling of low-silica lava at the surface.',
+    composition: ['Plagioclase feldspar', 'Pyroxene', 'Olivine'],
+    hardness: '6',
+    safety: { level: 'safe', note: 'Common, benign. Handle normally.' },
+  },
+  {
+    id: 'granite',
+    name: 'Granite',
+    scientific: 'Felsic intrusive igneous',
+    rock_type: 'igneous',
+    tagline: 'Coarse-grained plutonic rock. The backbone of continents.',
+    formation: 'Slow cooling of silica-rich magma deep underground.',
+    composition: ['Quartz', 'Potassium feldspar', 'Plagioclase', 'Biotite'],
+    hardness: '6 – 7',
+    safety: { level: 'safe', note: 'Safe to handle.' },
+  },
+  {
+    id: 'sandstone',
+    name: 'Sandstone',
+    scientific: 'Clastic sedimentary',
+    rock_type: 'sedimentary',
+    tagline: 'Cemented sand grains. Records ancient rivers, deserts, beaches.',
+    formation: 'Lithification of sand deposits under pressure.',
+    composition: ['Quartz', 'Feldspar', 'Lithic fragments'],
+    hardness: '6 – 7',
+    safety: { level: 'safe', note: 'Safe to handle.' },
+  },
+  {
+    id: 'quartz',
+    name: 'Quartz',
+    scientific: 'SiO₂ (silicate)',
+    rock_type: 'mineral',
+    tagline: 'The most abundant mineral at Earth’s surface.',
+    formation: 'Crystallises from silica-rich fluids and melts.',
+    composition: ['Silicon dioxide'],
+    hardness: '7',
+    safety: { level: 'safe', note: 'Safe to handle. Avoid breathing dust from cutting.' },
+  },
+  {
+    id: 'schist',
+    name: 'Schist',
+    scientific: 'Foliated metamorphic',
+    rock_type: 'metamorphic',
+    tagline: 'Shiny mica-rich rock with wavy foliation.',
+    formation: 'Medium-grade metamorphism of mudstone or basalt.',
+    composition: ['Mica (muscovite, biotite)', 'Quartz', 'Feldspar', 'Garnet'],
+    hardness: '3 – 4 (mica) to 7 (quartz)',
+    safety: { level: 'safe', note: 'Safe to handle.' },
+  },
+];
+
+const rockById = (id) => ROCKS.find(r => r.id === id);
+
+// Geolocation helpers ─────────────────────────────────────
+// Always fresh — used at capture time so coords reflect where the shot was taken.
+function getGeoFresh() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error('Geolocation not supported'));
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (err) => reject(new Error(err.message || 'Location denied')),
+      { timeout: 10000, maximumAge: 0, enableHighAccuracy: true }
+    );
+  });
+}
+
+// Cached — used for the "bedrock beneath you" home-screen card.
+let __geoPromise = null;
+function getGeo() {
+  if (__geoPromise) return __geoPromise;
+  __geoPromise = new Promise((resolve, reject) => {
+    if (!navigator.geolocation) return reject(new Error('Geolocation not supported'));
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      (err) => reject(new Error(err.message || 'Location denied')),
+      { timeout: 10000, maximumAge: 10 * 60 * 1000, enableHighAccuracy: false }
+    );
+  });
+  return __geoPromise;
+}
+
+// Fetch Macrostrat bedrock context via our worker (same-origin, cached).
+async function fetchBedrock(lat, lng) {
+  // cache: 'no-store' defeats any intermediate/browser cache so the home
+  // screen always sees the current server response (important while the
+  // BGS fallback is being rolled out).
+  const res = await fetch(
+    `/api/bedrock?lat=${encodeURIComponent(lat)}&lng=${encodeURIComponent(lng)}`,
+    { cache: 'no-store' }
+  );
+  if (!res.ok) throw new Error('Bedrock lookup failed');
+  return res.json();
+}
+
+function haversineKm(lat1, lon1, lat2, lon2) {
+  const R = 6371;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat/2)**2 +
+    Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180) *
+    Math.sin(dLon/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(a));
+}
+</script>
+
+<!-- ============================================================
+     ICONS
+     ============================================================ -->
+<script type="text/babel">
+const Icon = ({ d, size = 20, stroke = 'currentColor', fill = 'none', sw = 1.8, style }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill={fill} stroke={stroke} strokeWidth={sw} strokeLinecap="round" strokeLinejoin="round" style={style}>
+    <path d={d} />
+  </svg>
+);
+
+// Rock — a faceted pebble/crystal
+const IconRock = (p) => <Icon {...p} d="M6 10l4-6h5l4 4-3 10H8L5 12z M10 4l3 6 6-2 M10 4l-2 8 5 6" />;
+const IconFlash = (p) => <Icon {...p} d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />;
+const IconBook = (p) => <Icon {...p} d="M4 19.5A2.5 2.5 0 016.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z" />;
+const IconMap = (p) => <Icon {...p} d="M3 6l6-3 6 3 6-3v15l-6 3-6-3-6 3zM9 3v15M15 6v15" />;
+const IconShield = (p) => <Icon {...p} d="M12 2l8 3v7c0 5-3.5 8-8 10-4.5-2-8-5-8-10V5z" />;
+const IconDrop = (p) => <Icon {...p} d="M12 2s-7 8-7 13a7 7 0 0014 0c0-5-7-13-7-13z" />;
+const IconHammer = (p) => <Icon {...p} d="M15 3l6 6-4 4-6-6 4-4z M11 7l-8 8 3 3 8-8" />;
+const IconFlask = (p) => <Icon {...p} d="M9 3h6v4l5 11a3 3 0 01-3 4H7a3 3 0 01-3-4l5-11z M9 14h6" />;
+const IconCrystal = (p) => <Icon {...p} d="M12 2l7 6-7 14-7-14zM5 8h14" />;
+const IconLayers = (p) => <Icon {...p} d="M3 8l9-5 9 5-9 5zM3 13l9 5 9-5 M3 18l9 5 9-5" />;
+const IconBack = (p) => <Icon {...p} d="M19 12H5M12 19l-7-7 7-7" />;
+const IconPin = (p) => <Icon {...p} d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0zM12 13a3 3 0 100-6 3 3 0 000 6z" />;
+const IconBookmark = (p) => <Icon {...p} d="M19 21l-7-5-7 5V5a2 2 0 012-2h10a2 2 0 012 2z" />;
+const IconPlus = (p) => <Icon {...p} d="M12 5v14M5 12h14" />;
+const IconTrash = (p) => <Icon {...p} d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6M10 11v6M14 11v6" />;
+const IconChevDown = (p) => <Icon {...p} d="M6 9l6 6 6-6" />;
+</script>
+
+<!-- ============================================================
+     RockImage — fallback SVG rendered per rock_type
+     ============================================================ -->
+<script type="text/babel">
+function RockImage({ rock, size = 200, style = {}, rounded = 24, photoUrl }) {
+  if (photoUrl) {
+    return (
+      <div style={{
+        width: size, height: size, borderRadius: rounded, overflow: 'hidden',
+        background: `#000 center/cover url(${photoUrl})`, position: 'relative',
+        ...style,
+      }} />
+    );
+  }
+  const pal = paletteFor(rock?.rock_type || 'other');
+  const { a, b, c } = pal;
+
+  const renderShape = () => {
+    switch (rock?.rock_type) {
+      case 'igneous':
+        // Angular volcanic fragment with vesicles
+        return (
+          <g>
+            <polygon points="40,60 90,30 155,50 170,120 130,170 60,165 30,110" fill={b} />
+            <polygon points="40,60 90,30 155,50 170,120 130,170 60,165 30,110" fill={a} opacity="0.35" />
+            {[[70,90,6],[110,75,4],[95,125,5],[140,110,4],[80,140,3]].map(([cx,cy,r],i) => (
+              <circle key={i} cx={cx} cy={cy} r={r} fill={a} opacity="0.6" />
+            ))}
+          </g>
+        );
+      case 'sedimentary':
+        // Horizontal bedding layers
+        return (
+          <g>
+            {[0,1,2,3,4,5].map(i => (
+              <rect key={i} x="20" y={30 + i*25} width="160" height="22" rx="3"
+                fill={i % 2 ? b : c} opacity={0.85 - i*0.05} />
+            ))}
+            <rect x="20" y="30" width="160" height="160" fill="none" stroke={a} strokeOpacity="0.3" strokeWidth="1.5" rx="4" />
+          </g>
+        );
+      case 'metamorphic':
+        // Wavy foliation
+        return (
+          <g>
+            <rect x="20" y="30" width="160" height="140" rx="12" fill={b} />
+            {[0,1,2,3,4].map(i => {
+              const y = 50 + i * 22;
+              return (
+                <path key={i} d={`M 20 ${y} Q 60 ${y-8} 100 ${y} T 180 ${y}`}
+                  stroke={a} strokeWidth="3" fill="none" opacity="0.6" />
+              );
+            })}
+          </g>
+        );
+      case 'mineral':
+        // Crystal cluster
+        return (
+          <g>
+            {[[100,40,70,100],[75,70,60,130],[125,70,60,130],[50,95,50,160],[150,95,50,160]].map(([cx, top, w, bot], i) => (
+              <polygon key={i} points={`${cx},${top} ${cx+w/2},${top+25} ${cx+w/2},${bot-20} ${cx},${bot} ${cx-w/2},${bot-20} ${cx-w/2},${top+25}`}
+                fill={i === 0 ? c : b} opacity={0.8 + i*0.04} stroke={a} strokeWidth="1.5" />
+            ))}
+          </g>
+        );
+      case 'meteorite':
+        return (
+          <g>
+            <circle cx="100" cy="100" r="70" fill={b} />
+            <circle cx="100" cy="100" r="70" fill={a} opacity="0.4" />
+            {[[80,70],[120,85],[95,120],[130,130],[70,110]].map(([cx,cy],i) => (
+              <ellipse key={i} cx={cx} cy={cy} rx="8" ry="5" fill={a} opacity="0.7" />
+            ))}
+          </g>
+        );
+      case 'fossil':
+        // Ammonite spiral
+        return (
+          <g transform="translate(100,100)">
+            <circle r="70" fill={c} opacity="0.3" />
+            {[0,1,2,3,4,5,6].map(i => {
+              const r = 10 + i*9;
+              return <circle key={i} r={r} fill="none" stroke={a} strokeWidth="2" strokeOpacity={0.7 - i*0.08} />;
+            })}
+          </g>
+        );
+      default:
+        return <circle cx="100" cy="100" r="70" fill={b} />;
+    }
+  };
+
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: rounded, overflow: 'hidden',
+      background: `linear-gradient(135deg, ${a} 0%, ${b} 50%, ${c} 100%)`,
+      position: 'relative', ...style,
+    }}>
+      <svg viewBox="0 0 200 200" width="100%" height="100%" style={{ display: 'block' }}>
+        <defs>
+          <radialGradient id={`glow-${rock?.id || 'x'}`}>
+            <stop offset="0%" stopColor="#fff" stopOpacity="0.18" />
+            <stop offset="100%" stopColor="#fff" stopOpacity="0" />
+          </radialGradient>
+        </defs>
+        <circle cx="60" cy="50" r="90" fill={`url(#glow-${rock?.id || 'x'})`} />
+        {renderShape()}
+      </svg>
+    </div>
+  );
+}
+</script>
+
+<!-- ============================================================
+     SHARED UI — SafetyBadge, GlassChip, RockTypeChip, FactCell, image helpers, API
+     ============================================================ -->
+<script type="text/babel">
+function SafetyBadge({ level, small }) {
+  const map = {
+    safe:      { bg: '#3a7a3a', label: 'Safe',      icon: '✓' },
+    caution:   { bg: '#d47a2a', label: 'Caution',   icon: '⚠' },
+    hazardous: { bg: '#c94a3a', label: 'Hazardous', icon: '☠' },
+    unknown:   { bg: '#6B6655', label: 'Unknown',   icon: '?' },
+  };
+  const m = map[level] || map.unknown;
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: 4,
+      background: m.bg, color: '#fff',
+      padding: small ? '2px 7px' : '4px 9px', borderRadius: 999,
+      fontSize: small ? 10 : 11, fontWeight: 600,
+    }}>{m.icon} {m.label}</span>
+  );
+}
+
+function GlassChip({ children, onClick }) {
+  return (
+    <button onClick={onClick} style={{
+      display: 'flex', alignItems: 'center', gap: 6,
+      padding: '8px 14px', borderRadius: 999,
+      background: 'rgba(255,255,255,0.8)',
+      backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)',
+      border: '1px solid rgba(255,255,255,0.5)',
+      cursor: 'pointer',
+    }}>{children}</button>
+  );
+}
+
+function RockTypeChip({ rockType, size = 'sm' }) {
+  if (!rockType) return null;
+  const pal = paletteFor(rockType);
+  const fontSize = size === 'sm' ? 9 : 10;
+  const padding = size === 'sm' ? '2px 7px' : '3px 9px';
+  return (
+    <span style={{
+      fontSize, fontWeight: 700, letterSpacing: 0.6, textTransform: 'uppercase',
+      padding, borderRadius: 999,
+      background: THEME.accentSoft, color: THEME.accentDeep,
+      display: 'inline-block', whiteSpace: 'nowrap',
+    }}>{pal.emoji} {pal.label}</span>
+  );
+}
+
+function FactCell({ icon, label, value }) {
+  return (
+    <div style={{
+      background: THEME.surface, borderRadius: THEME.radiusSm,
+      padding: 12, boxShadow: THEME.shadow,
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        fontSize: 11, color: THEME.inkMuted, fontWeight: 600,
+        textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 6,
+      }}>
+        {icon} {label}
+      </div>
+      <div>{value}</div>
+    </div>
+  );
+}
+
+// Shrink an image to max 1568px on the long edge (Claude Vision's sweet spot).
+async function shrinkImage(file, maxDim = 1568, quality = 0.85) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((res, rej) => {
+      const i = new Image();
+      i.onload = () => res(i);
+      i.onerror = rej;
+      i.src = url;
+    });
+    const scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+    const w = Math.round(img.width * scale);
+    const h = Math.round(img.height * scale);
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.drawImage(img, 0, 0, w, h);
+    return c.toDataURL('image/jpeg', quality);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+const CAM_PREF_KEY = 'geolyssa:cameraDeviceId:v1';
+function getSavedCameraId() {
+  try { return localStorage.getItem(CAM_PREF_KEY) || null; } catch { return null; }
+}
+function saveCameraId(id) {
+  try { id ? localStorage.setItem(CAM_PREF_KEY, id) : localStorage.removeItem(CAM_PREF_KEY); } catch {}
+}
+
+const DEVICE_ID_KEY = 'geolyssa:device_id:v1';
+function getDeviceId() {
+  let id = null;
+  try { id = localStorage.getItem(DEVICE_ID_KEY); } catch {}
+  if (!id) {
+    id = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : 'd-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 14);
+    try { localStorage.setItem(DEVICE_ID_KEY, id); } catch {}
+  }
+  return id;
+}
+
+function downscalePhoto(dataUrl, maxDim = 1024, quality = 0.72) {
+  return new Promise((resolve, reject) => {
+    if (!dataUrl) return resolve(null);
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, maxDim / Math.max(img.naturalWidth, img.naturalHeight));
+      const w = Math.max(1, Math.round(img.naturalWidth * scale));
+      const h = Math.max(1, Math.round(img.naturalHeight * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      try { resolve(canvas.toDataURL('image/jpeg', quality)); }
+      catch (e) { reject(e); }
+    };
+    img.onerror = () => reject(new Error('Image decode failed'));
+    img.src = dataUrl;
+  });
+}
+
+async function apiSaveEntry({ rock, photoUrl, date, location, coords, note, alternatives, macrostrat }) {
+  const device_id = getDeviceId();
+  const image = photoUrl ? await downscalePhoto(photoUrl) : null;
+  const res = await fetch('/api/journal', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device_id, rock, date, location, coords, note, image, alternatives, macrostrat }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Save failed (${res.status})`);
+  }
+  return res.json();
+}
+
+async function apiListEntries() {
+  const device_id = getDeviceId();
+  const res = await fetch(`/api/journal?device_id=${encodeURIComponent(device_id)}`);
+  if (!res.ok) throw new Error(`Load failed (${res.status})`);
+  const data = await res.json();
+  return Array.isArray(data.entries) ? data.entries : [];
+}
+
+async function apiDeleteEntry(id) {
+  const device_id = getDeviceId();
+  const res = await fetch(`/api/journal/${encodeURIComponent(id)}?device_id=${encodeURIComponent(device_id)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Delete failed (${res.status})`);
+  }
+  return res.json();
+}
+
+async function apiPatchEntry(id, patch) {
+  const device_id = getDeviceId();
+  const res = await fetch(`/api/journal/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ device_id, ...patch }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Update failed (${res.status})`);
+  }
+  return res.json();
+}
+
+async function apiReidentifyEntry(id, extras = {}) {
+  const device_id = getDeviceId();
+  const res = await fetch('/api/identify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ entry_id: id, device_id, ...extras }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Re-identify failed (${res.status})`);
+  }
+  return res.json();
+}
+
+function formatEntryTime(entry) {
+  if (entry && typeof entry.createdAt === 'number') {
+    return new Date(entry.createdAt).toLocaleString(undefined, {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+    });
+  }
+  return (entry && entry.date) || '';
+}
+</script>
+
+<!-- ============================================================
+     TestPanel — optional physical-test inputs before scan
+     ============================================================ -->
+<script type="text/babel">
+const HARDNESS_OPTIONS = [
+  { id: 'fingernail', label: 'Fingernail scratches it', hint: 'Mohs ≤ 2.5' },
+  { id: 'coin',       label: 'Copper coin scratches',   hint: '2.5 – 3.5' },
+  { id: 'knife',      label: 'Steel knife scratches',   hint: '3.5 – 5.5' },
+  { id: 'glass',      label: 'It scratches glass',      hint: '≥ 5.5' },
+  { id: 'quartz',     label: 'It scratches quartz',     hint: '≥ 7' },
+];
+const FIZZ_OPTIONS = [
+  { id: 'yes',    label: 'Fizzes' },
+  { id: 'no',     label: 'No fizz' },
+  { id: '',       label: 'Not tested' },
+];
+const MAGNETIC_OPTIONS = [
+  { id: 'yes',    label: 'Magnetic' },
+  { id: 'no',     label: 'Not magnetic' },
+  { id: '',       label: 'Not tested' },
+];
+
+// Reusable inner form — used by TestPanel (collapsible) and TestSheet (modal).
+function TestFields({ tests, setTests }) {
+  const setField = (k, v) => setTests({ ...tests, [k]: v === tests[k] ? '' : v });
+  const fieldLabel = { fontSize: 11, fontWeight: 700, color: THEME.inkMuted, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 };
+  const touched = tests.hardness || tests.streak || tests.fizz || tests.magnetic || tests.heft;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      <div>
+        <div style={fieldLabel}>Hardness</div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+          {HARDNESS_OPTIONS.map(o => {
+            const active = tests.hardness === o.id;
+            return (
+              <button key={o.id} onClick={() => setField('hardness', o.id)} style={{
+                padding: '7px 11px', borderRadius: 999, fontSize: 12, fontWeight: 600,
+                background: active ? THEME.accent : 'transparent', color: active ? '#fff' : THEME.ink,
+                boxShadow: active ? 'none' : 'inset 0 0 0 1px rgba(0,0,0,0.1)',
+              }}>{o.label} <span style={{ opacity: 0.7, fontSize: 10 }}>· {o.hint}</span></button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div>
+        <div style={fieldLabel}>Streak colour (rub on unglazed tile)</div>
+        <input
+          value={tests.streak || ''}
+          onChange={(e) => setTests({ ...tests, streak: e.target.value })}
+          placeholder="e.g. white, grey, red-brown"
+          style={{
+            width: '100%', padding: '8px 12px', borderRadius: THEME.radiusTight,
+            background: THEME.bg, border: 'none', fontSize: 13,
+            boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.1)',
+          }}
+        />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <div>
+          <div style={fieldLabel}>Vinegar drop</div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {FIZZ_OPTIONS.filter(o => o.id).map(o => {
+              const active = tests.fizz === o.id;
+              return (
+                <button key={o.id} onClick={() => setField('fizz', o.id)} style={{
+                  flex: 1, padding: '7px 8px', borderRadius: THEME.radiusTight, fontSize: 12, fontWeight: 600,
+                  background: active ? THEME.accent : 'transparent', color: active ? '#fff' : THEME.ink,
+                  boxShadow: active ? 'none' : 'inset 0 0 0 1px rgba(0,0,0,0.1)',
+                }}>{o.label}</button>
+              );
+            })}
+          </div>
+        </div>
+        <div>
+          <div style={fieldLabel}>Magnet</div>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {MAGNETIC_OPTIONS.filter(o => o.id).map(o => {
+              const active = tests.magnetic === o.id;
+              return (
+                <button key={o.id} onClick={() => setField('magnetic', o.id)} style={{
+                  flex: 1, padding: '7px 8px', borderRadius: THEME.radiusTight, fontSize: 12, fontWeight: 600,
+                  background: active ? THEME.accent : 'transparent', color: active ? '#fff' : THEME.ink,
+                  boxShadow: active ? 'none' : 'inset 0 0 0 1px rgba(0,0,0,0.1)',
+                }}>{o.label}</button>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div style={fieldLabel}>Heft for size</div>
+        <div style={{ display: 'flex', gap: 4 }}>
+          {['light', 'normal', 'dense'].map(o => {
+            const active = tests.heft === o;
+            return (
+              <button key={o} onClick={() => setField('heft', o)} style={{
+                flex: 1, padding: '7px 8px', borderRadius: THEME.radiusTight, fontSize: 12, fontWeight: 600,
+                background: active ? THEME.accent : 'transparent', color: active ? '#fff' : THEME.ink,
+                boxShadow: active ? 'none' : 'inset 0 0 0 1px rgba(0,0,0,0.1)',
+                textTransform: 'capitalize',
+              }}>{o}</button>
+            );
+          })}
+        </div>
+      </div>
+
+      {touched && (
+        <button onClick={() => setTests({})} style={{
+          alignSelf: 'flex-start', fontSize: 12, color: THEME.inkMuted,
+          padding: '4px 8px', fontWeight: 600,
+        }}>Clear all</button>
+      )}
+    </div>
+  );
+}
+
+function TestPanel({ tests, setTests, onOpen }) {
+  const [open, setOpen] = React.useState(false);
+  const touched = tests.hardness || tests.streak || tests.fizz || tests.magnetic || tests.heft;
+
+  const handleOpen = () => {
+    setOpen(true);
+    if (onOpen) onOpen();
+  };
+
+  if (!open) {
+    return (
+      <button onClick={handleOpen} style={{
+        width: '100%', padding: '10px 14px', borderRadius: THEME.radiusSm,
+        background: touched ? THEME.accentSoft : THEME.surface,
+        color: THEME.ink, fontWeight: 600, fontSize: 13,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+        boxShadow: 'inset 0 0 0 1px rgba(0,0,0,0.08)',
+      }}>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <IconFlask size={16} stroke={THEME.accent} />
+          {touched ? 'Quick tests added' : 'Add quick tests (optional)'}
+        </span>
+        <IconChevDown size={16} stroke={THEME.inkMuted} />
+      </button>
+    );
+  }
+
+  return (
+    <div style={{
+      background: THEME.surface, borderRadius: THEME.radiusSm,
+      padding: 14, boxShadow: THEME.shadow,
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div style={{ fontFamily: FONTS.heading, fontSize: 18, fontWeight: 500 }}>Quick tests</div>
+        <button onClick={() => setOpen(false)} style={{
+          color: THEME.inkMuted, fontSize: 13, fontWeight: 600, padding: 4,
+        }}>Done</button>
+      </div>
+      <TestFields tests={tests} setTests={setTests} />
+    </div>
+  );
+}
+
+// TestSheet — bottom-sheet wrapper for TestFields, used from ResultsScreen
+// when the user wants to refine a low-confidence match.
+function TestSheet({ open, tests, onClose, onApply }) {
+  const [draft, setDraft] = React.useState(tests);
+  React.useEffect(() => { if (open) setDraft(tests); }, [open, tests]);
+  if (!open) return null;
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+      display: 'flex', alignItems: 'flex-end', zIndex: 140,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width: '100%', maxHeight: '92%', background: THEME.bg,
+        borderTopLeftRadius: 24, borderTopRightRadius: 24,
+        padding: '16px 18px calc(18px + env(safe-area-inset-bottom))',
+        overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 12,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontFamily: FONTS.heading, fontSize: 22, fontWeight: 500 }}>Add quick tests</div>
+          <button onClick={onClose} style={{
+            width: 34, height: 34, borderRadius: '50%',
+            background: THEME.surface, fontSize: 20, lineHeight: 1,
+          }}>×</button>
+        </div>
+        <div style={{ fontSize: 13, color: THEME.inkMuted }}>
+          Run any of these on the specimen. Claude will re-score with your results as authoritative.
+        </div>
+        <TestFields tests={draft} setTests={setDraft} />
+        <button onClick={() => onApply(draft)} style={{
+          marginTop: 8, height: 48, borderRadius: THEME.radiusSm,
+          background: THEME.accent, color: '#fff', fontWeight: 700, fontSize: 15,
+        }}>Re-identify with these →</button>
+      </div>
+    </div>
+  );
+}
+</script>
+
+<!-- ============================================================
+     SCREEN — HOME (camera capture + bedrock card + test panel)
+     ============================================================ -->
+<script type="text/babel">
+const PART_PREF_KEY = 'geolyssa:capture_part:v1';
+const CAPTURE_PARTS = [
+  { id: 'whole',       label: 'whole' },
+  { id: 'fresh_break', label: 'fresh break' },
+  { id: 'crystals',    label: 'crystals' },
+  { id: 'weathered',   label: 'weathered' },
+];
+
+function HomeScreen({ onCapture, onOpenJournal, onOpenMap, onSelectEntry, recentCount, recentEntries, tests, setTests }) {
+  const [capturing, setCapturing] = React.useState(false);
+  const [sheetOpen, setSheetOpen] = React.useState(false);
+  const [dragDelta, setDragDelta] = React.useState(0);
+  const dragStartY = React.useRef(null);
+  const [bedrock, setBedrock] = React.useState(null);
+  const [bedrockLoaded, setBedrockLoaded] = React.useState(false);
+  const [bedrockErr, setBedrockErr] = React.useState(null);
+  const fileRef = React.useRef(null);
+  const recentJournal = recentEntries || [];
+  const [selectedPart, setSelectedPartRaw] = React.useState(() => {
+    try { return localStorage.getItem(PART_PREF_KEY) || 'whole'; }
+    catch { return 'whole'; }
+  });
+  const setSelectedPart = (p) => {
+    setSelectedPartRaw(p);
+    try { localStorage.setItem(PART_PREF_KEY, p); } catch {}
+  };
+
+  // Pane-wide drag: touching anywhere on the pane can drag it up/down, unless
+  // the touch starts inside the scroll container and the scroll can actually
+  // consume the gesture (so native scrolling keeps working).
+  const scrollRef = React.useRef(null);
+  const paneDrag = React.useRef(null);
+
+  const onPaneTouchStart = (e) => {
+    const scrollEl = scrollRef.current;
+    const startY = e.touches[0].clientY;
+    const insideScroll = !!(scrollEl && scrollEl.contains(e.target));
+    paneDrag.current = {
+      startY,
+      scrollTopAtStart: scrollEl ? scrollEl.scrollTop : 0,
+      insideScroll,
+      committed: false,
+    };
+    dragStartY.current = startY;
+  };
+
+  const onPaneTouchMove = (e) => {
+    const s = paneDrag.current;
+    if (!s) return;
+    const delta = s.startY - e.touches[0].clientY; // + = up, − = down
+    const scrollEl = scrollRef.current;
+
+    if (!s.committed) {
+      // Decide: should this gesture drive the pane, or native scrolling?
+      if (s.insideScroll && scrollEl) {
+        const canScrollUp = scrollEl.scrollTop > 0;
+        const canScrollDown = scrollEl.scrollTop + scrollEl.clientHeight < scrollEl.scrollHeight - 1;
+        if (delta > 0 && canScrollDown) return;   // swipe up to scroll content
+        if (delta < 0 && canScrollUp) return;     // swipe down to scroll content
+      }
+      if (Math.abs(delta) < 4) return;
+      s.committed = true;
+    }
+
+    e.preventDefault();
+    setDragDelta(delta);
+  };
+
+  const onPaneTouchEnd = () => {
+    const s = paneDrag.current;
+    paneDrag.current = null;
+    dragStartY.current = null;
+    if (s && s.committed) {
+      const THRESH = 50;
+      if (dragDelta > THRESH) setSheetOpen(true);
+      else if (dragDelta < -THRESH) setSheetOpen(false);
+    }
+    setDragDelta(0);
+  };
+
+  const baseHeightPct = sheetOpen ? 80 : 42;
+  const viewportH = typeof window !== 'undefined' ? window.innerHeight : 800;
+  const liveHeightPct = Math.max(32, Math.min(92, baseHeightPct + (dragDelta / viewportH) * 100));
+
+  const videoRef = React.useRef(null);
+  const streamRef = React.useRef(null);
+  const [cameraReady, setCameraReady] = React.useState(false);
+  const [cameraErr, setCameraErr] = React.useState(null);
+  const [cameras, setCameras] = React.useState([]);
+  const [activeCameraIdx, setActiveCameraIdx] = React.useState(0);
+
+  const startStream = React.useCallback(async (deviceId) => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    }
+    setCameraReady(false);
+
+    const constraints = deviceId
+      ? { video: { deviceId: { exact: deviceId }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }
+      : { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
+
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    streamRef.current = stream;
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      videoRef.current.play().catch(() => {});
+    }
+
+    const track = stream.getVideoTracks()[0];
+    try {
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      const advanced = [];
+      if (caps.focusMode?.includes('continuous')) advanced.push({ focusMode: 'continuous' });
+      if (caps.whiteBalanceMode?.includes('continuous')) advanced.push({ whiteBalanceMode: 'continuous' });
+      if (caps.exposureMode?.includes('continuous')) advanced.push({ exposureMode: 'continuous' });
+      if (advanced.length) await track.applyConstraints({ advanced });
+    } catch {}
+    setCameraReady(true);
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API not available');
+        await startStream(null);
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        if (cancelled) return;
+        const videoIns = devices.filter(d => d.kind === 'videoinput');
+        setCameras(videoIns);
+        // Preference order:
+        //   1. deviceId saved from a previous cycle (works across loads on same phone)
+        //   2. index 4 — camera 5 on Huawei P30 Pro (back-wide with best optics)
+        //   3. whatever facingMode: environment already picked
+        const savedId = getSavedCameraId();
+        let targetIdx = -1;
+        if (savedId) targetIdx = videoIns.findIndex(d => d.deviceId === savedId);
+        if (targetIdx < 0 && videoIns[4]) targetIdx = 4;
+        if (targetIdx >= 0) {
+          setActiveCameraIdx(targetIdx);
+          try { await startStream(videoIns[targetIdx].deviceId); } catch {}
+        }
+      } catch (e) {
+        if (!cancelled) setCameraErr(e.message || 'Camera unavailable');
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(t => t.stop());
+        streamRef.current = null;
+      }
+    };
+  }, [startStream]);
+
+  const cycleCamera = async () => {
+    if (cameras.length < 2) return;
+    const next = (activeCameraIdx + 1) % cameras.length;
+    setActiveCameraIdx(next);
+    try {
+      await startStream(cameras[next].deviceId);
+      saveCameraId(cameras[next].deviceId);
+    } catch {}
+  };
+
+  // Load bedrock context for "beneath you" card
+  React.useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { lat, lng } = await getGeo();
+        const data = await fetchBedrock(lat, lng);
+        if (cancelled) return;
+        setBedrock(data);        // object if mapped, null if Macrostrat has no coverage here
+        setBedrockLoaded(true);
+      } catch (e) {
+        if (!cancelled) {
+          setBedrockErr(e.message || 'Location unavailable');
+          setBedrockLoaded(true);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const triggerCapture = async () => {
+    if (capturing) return;
+    const video = videoRef.current;
+    if (streamRef.current && video && video.videoWidth > 0) {
+      setCapturing(true);
+      try {
+        const canvas = document.createElement('canvas');
+        const maxDim = 1568;
+        const scale = Math.min(1, maxDim / Math.max(video.videoWidth, video.videoHeight));
+        canvas.width = Math.round(video.videoWidth * scale);
+        canvas.height = Math.round(video.videoHeight * scale);
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+        setTimeout(() => onCapture(dataUrl, selectedPart), 220);
+      } catch (err) {
+        console.error('Canvas capture failed', err);
+        setCapturing(false);
+        alert('Capture failed. Try the file picker instead.');
+      }
+      return;
+    }
+    fileRef.current?.click();
+  };
+
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setCapturing(true);
+    try {
+      const dataUrl = await shrinkImage(file);
+      onCapture(dataUrl, selectedPart);
+    } catch (err) {
+      console.error('image processing failed', err);
+      setCapturing(false);
+      alert('Could not read that image. Try another.');
+    }
+  };
+
+  return (
+    <div style={{
+      position: 'relative', width: '100%', height: '100%',
+      background: THEME.bg, color: THEME.ink,
+      fontFamily: FONTS.body, overflow: 'hidden',
+    }}>
+      <input
+        ref={fileRef} type="file" accept="image/*" capture="environment"
+        onChange={handleFile}
+        style={{ position: 'absolute', width: 0, height: 0, opacity: 0 }}
+      />
+
+      {/* Viewfinder */}
+      <div style={{
+        position: 'absolute', top: 0, left: 0, right: 0,
+        height: '58%',
+        background: `
+          radial-gradient(ellipse at 30% 20%, ${THEME.accentGlow}55 0%, transparent 50%),
+          radial-gradient(ellipse at 70% 70%, ${THEME.accent}66 0%, transparent 55%),
+          linear-gradient(160deg, ${THEME.accentDeep} 0%, ${THEME.accent} 50%, ${THEME.accentGlow} 100%)
+        `,
+        overflow: 'hidden',
+      }}>
+        <video
+          ref={videoRef}
+          autoPlay playsInline muted
+          style={{
+            position: 'absolute', inset: 0, width: '100%', height: '100%',
+            objectFit: 'cover',
+            opacity: cameraReady ? 1 : 0,
+            transition: 'opacity 400ms ease-out',
+          }}
+        />
+
+        <div style={{
+          position: 'absolute', top: `calc(16px + env(safe-area-inset-top))`, left: 0, right: 0,
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+          padding: '0 16px', zIndex: 10,
+        }}>
+          <GlassChip onClick={onOpenJournal}>
+            <IconBook size={16} stroke={THEME.ink} />
+            <span style={{ fontSize: 13, fontWeight: 600, color: THEME.ink }}>Journal</span>
+          </GlassChip>
+          {cameras.length > 1 && (
+            <GlassChip onClick={cycleCamera}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={THEME.ink} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M23 4v6h-6M1 20v-6h6" />
+                <path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+              </svg>
+              <span style={{ fontSize: 13, fontWeight: 600, color: THEME.ink }}>
+                Cam · {activeCameraIdx + 1}/{cameras.length}
+              </span>
+            </GlassChip>
+          )}
+          <GlassChip onClick={() => window.location.reload()}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={THEME.ink} strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M1 4v6h6" />
+              <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+            </svg>
+          </GlassChip>
+        </div>
+
+        <div style={{
+          position: 'absolute', top: `calc(70px + env(safe-area-inset-top))`, left: 0, right: 0,
+          textAlign: 'center', pointerEvents: 'none', zIndex: 5,
+        }}>
+          <div style={{
+            display: 'inline-block',
+            background: 'rgba(0,0,0,0.4)', backdropFilter: 'blur(10px)',
+            color: '#fff', padding: '6px 14px', borderRadius: 999,
+            fontSize: 12, fontWeight: 500, letterSpacing: 0.2,
+          }}>
+            {cameraErr
+              ? '🪨 Tap to pick a photo'
+              : cameraReady
+                ? '🪨 Frame the specimen · tap to capture'
+                : '🪨 Starting camera…'}
+          </div>
+        </div>
+      </div>
+
+      {/* Lower panel — whole pane is draggable (see onPaneTouchMove) */}
+      <div
+        onTouchStart={onPaneTouchStart}
+        onTouchMove={onPaneTouchMove}
+        onTouchEnd={onPaneTouchEnd}
+        onTouchCancel={onPaneTouchEnd}
+        style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0,
+          height: `${liveHeightPct}%`,
+          background: THEME.bg,
+          borderTopLeftRadius: THEME.radius + 8,
+          borderTopRightRadius: THEME.radius + 8,
+          transition: dragStartY.current == null ? 'height 320ms cubic-bezier(0.34, 1.3, 0.4, 1)' : 'none',
+          boxShadow: '0 -8px 30px rgba(0,0,0,0.08)',
+          display: 'flex', flexDirection: 'column',
+        }}
+      >
+        <button
+          onClick={() => setSheetOpen(!sheetOpen)}
+          style={{
+            padding: '14px 0 8px', width: '100%',
+            display: 'flex', justifyContent: 'center', alignItems: 'center',
+          }}
+        >
+          <div style={{
+            width: 56, height: 5, borderRadius: 3,
+            background: THEME.inkMuted, opacity: sheetOpen ? 0.55 : 0.35,
+          }} />
+        </button>
+
+        {/* Capture controls */}
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          padding: '8px 28px 16px',
+        }}>
+          <button onClick={onOpenJournal} style={{
+            width: 48, height: 48, borderRadius: THEME.radiusSm,
+            border: `2px solid ${THEME.accentSoft}`,
+            background: recentJournal[0]?.photoUrl
+              ? `center/cover url(${recentJournal[0].photoUrl})`
+              : `linear-gradient(135deg, ${THEME.accent}, ${THEME.accentGlow})`,
+            position: 'relative', overflow: 'hidden',
+          }}>
+            {recentCount > 0 && (
+              <div style={{
+                position: 'absolute', bottom: 2, right: 2,
+                background: THEME.ink, color: THEME.bg, fontSize: 9, fontWeight: 700,
+                borderRadius: 999, padding: '2px 6px',
+              }}>{recentCount}</div>
+            )}
+          </button>
+
+          <button onClick={triggerCapture} style={{
+            width: 86, height: 86, borderRadius: '50%',
+            background: 'transparent', position: 'relative',
+          }}>
+            <svg width="86" height="86" viewBox="0 0 86 86" style={{ position: 'absolute', inset: 0 }}>
+              <circle cx="43" cy="43" r="40" fill="none" stroke={THEME.accentSoft} strokeWidth="2" />
+              <circle cx="43" cy="43" r="40" fill="none" stroke={THEME.accent} strokeWidth="2.5"
+                strokeDasharray="4 10" opacity={capturing ? 1 : 0.5}
+                style={{
+                  transformOrigin: '43px 43px',
+                  animation: capturing ? 'spin 0.6s linear infinite' : 'spin 8s linear infinite',
+                }} />
+            </svg>
+            <div style={{
+              position: 'absolute', inset: 10, borderRadius: '50%',
+              background: `radial-gradient(circle at 35% 30%, ${THEME.accentGlow}, ${THEME.accent} 65%, ${THEME.accentDeep})`,
+              boxShadow: capturing
+                ? `0 0 0 8px ${THEME.accentSoft}, inset 0 -6px 12px rgba(0,0,0,0.25)`
+                : `inset 0 -6px 12px rgba(0,0,0,0.25), 0 4px 16px ${THEME.accent}55`,
+              transform: capturing ? 'scale(0.88)' : 'scale(1)',
+              transition: 'all 200ms ease',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>
+              <IconRock size={28} stroke="#fff" sw={2.2} />
+            </div>
+          </button>
+
+          <button onClick={onOpenMap} aria-label="Discoveries map" style={{
+            width: 48, height: 48, borderRadius: THEME.radiusSm,
+            background: THEME.surface, boxShadow: THEME.shadow,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>
+            <IconMap size={20} stroke={THEME.ink} />
+          </button>
+        </div>
+
+        {/* Part selector */}
+        <div style={{
+          display: 'flex', justifyContent: 'center', gap: 8,
+          padding: '0 16px 12px', flexWrap: 'wrap',
+        }}>
+          {CAPTURE_PARTS.map(p => {
+            const active = selectedPart === p.id;
+            return (
+              <button key={p.id} onClick={() => setSelectedPart(p.id)} style={{
+                padding: '6px 14px', borderRadius: 999,
+                background: active ? THEME.accent : 'transparent',
+                color: active ? '#fff' : THEME.inkMuted,
+                fontSize: 13, fontWeight: 600,
+                boxShadow: active ? THEME.shadow : 'inset 0 0 0 1px rgba(0,0,0,0.08)',
+              }}>{p.label}</button>
+            );
+          })}
+        </div>
+
+        {/* Scrolling content (TestPanel lives inside so expanded panel is reachable) */}
+        <div ref={scrollRef} style={{
+          flex: 1, minHeight: 0,
+          overflowY: 'auto', WebkitOverflowScrolling: 'touch',
+          padding: '4px 20px 20px',
+          display: 'flex', flexDirection: 'column', gap: 12,
+        }}>
+          <TestPanel
+            tests={tests}
+            setTests={setTests}
+            onOpen={() => setSheetOpen(true)}
+          />
+
+          <BedrockCard bedrock={bedrock} loaded={bedrockLoaded} error={bedrockErr} />
+
+          {sheetOpen && (
+            <div style={{ marginTop: 4 }}>
+              <div style={{
+                fontFamily: FONTS.heading, fontSize: 24, fontWeight: 500,
+                marginBottom: 6,
+              }}>Your recent journal</div>
+              {recentJournal.length === 0 ? (
+                <div style={{ fontSize: 13, color: THEME.inkMuted, padding: '12px 0' }}>
+                  No entries yet. Capture a specimen to get started.
+                </div>
+              ) : (
+                recentJournal.map((j, i) => (
+                  <JournalRow key={j.id || i} entry={j} onSelect={onSelectEntry} />
+                ))
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BedrockCard({ bedrock, loaded, error }) {
+  // Loading (no result yet and no error)
+  if (!loaded && !error) {
+    return (
+      <div style={{
+        padding: '14px 16px', background: THEME.surface,
+        borderRadius: THEME.radiusSm, boxShadow: THEME.shadow,
+        display: 'flex', gap: 12, alignItems: 'center',
+      }}>
+        <div style={{ fontSize: 28 }}>🗺️</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontFamily: FONTS.heading, fontSize: 20, fontWeight: 500 }}>Bedrock beneath you</div>
+          <div style={{ fontSize: 12, color: THEME.inkMuted }}>Loading…</div>
+        </div>
+      </div>
+    );
+  }
+  // Error (location denied / geolocation unavailable)
+  if (error) {
+    return (
+      <div style={{
+        padding: '14px 16px', background: THEME.surface,
+        borderRadius: THEME.radiusSm, boxShadow: THEME.shadow,
+        display: 'flex', gap: 12, alignItems: 'center',
+      }}>
+        <div style={{ fontSize: 28 }}>🗺️</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontFamily: FONTS.heading, fontSize: 20, fontWeight: 500 }}>Bedrock beneath you</div>
+          <div style={{ fontSize: 12, color: THEME.inkMuted }}>Allow location to see what you&apos;re standing on.</div>
+        </div>
+      </div>
+    );
+  }
+  // Loaded but no Macrostrat coverage at these coords — still useful to show
+  // something rather than silently hiding (otherwise the UI looks broken).
+  if (!bedrock) {
+    return (
+      <div style={{
+        padding: '14px 16px', background: THEME.surface,
+        borderRadius: THEME.radiusSm, boxShadow: THEME.shadow,
+        display: 'flex', gap: 12, alignItems: 'center',
+      }}>
+        <div style={{ fontSize: 28 }}>🗺️</div>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontFamily: FONTS.heading, fontSize: 20, fontWeight: 500 }}>Bedrock beneath you</div>
+          <div style={{ fontSize: 12, color: THEME.inkMuted }}>Not in the Macrostrat map at this location.</div>
+        </div>
+      </div>
+    );
+  }
+  const ageLabel = bedrock.age_top && bedrock.age_bottom
+    ? `${bedrock.age_bottom} – ${bedrock.age_top}`
+    : bedrock.age_top || '';
+  return (
+    <div style={{
+      padding: '14px 16px', background: THEME.accentDeep, color: '#fff',
+      borderRadius: THEME.radiusSm, boxShadow: THEME.shadow,
+    }}>
+      <div style={{
+        fontSize: 10, fontWeight: 700, letterSpacing: 0.8, opacity: 0.7,
+        textTransform: 'uppercase', marginBottom: 4,
+      }}>Bedrock beneath you</div>
+      <div style={{ fontFamily: FONTS.heading, fontSize: 22, fontWeight: 500, lineHeight: 1.15 }}>
+        {bedrock.unit || bedrock.lithology || 'Unmapped'}
+      </div>
+      {bedrock.lithology && bedrock.unit && bedrock.lithology !== bedrock.unit && (
+        <div style={{ fontSize: 12, opacity: 0.85, marginTop: 2 }}>{bedrock.lithology}</div>
+      )}
+      {ageLabel && (
+        <div style={{ fontSize: 11, opacity: 0.75, marginTop: 6, fontFamily: FONTS.mono }}>
+          {ageLabel}
+        </div>
+      )}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        marginTop: 8, gap: 8,
+      }}>
+        <div style={{ fontSize: 10, opacity: 0.55 }}>
+          via {bedrock.source === 'bgs' ? 'British Geological Survey' : 'Macrostrat'}
+        </div>
+        {bedrock.learn_more_url && (
+          <a
+            href={bedrock.learn_more_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={e => e.stopPropagation()}
+            style={{
+              fontSize: 11, fontWeight: 700, color: '#fff',
+              textDecoration: 'none', opacity: 0.9,
+              padding: '3px 10px', borderRadius: 999,
+              background: 'rgba(255,255,255,0.15)',
+              border: '1px solid rgba(255,255,255,0.25)',
+            }}
+          >Learn more ↗</a>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function JournalRow({ entry, onSelect }) {
+  const rock = entry.rock;
+  if (!rock) return null;
+  const clickable = typeof onSelect === 'function';
+  return (
+    <div
+      onClick={clickable ? () => onSelect(entry) : undefined}
+      style={{
+        display: 'flex', gap: 12, padding: '10px 0',
+        borderBottom: `1px solid ${THEME.accentSoft}55`,
+        cursor: clickable ? 'pointer' : 'default',
+      }}>
+      <RockImage rock={rock} size={48} rounded={THEME.radiusTight} photoUrl={entry.photoUrl} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 6 }}>
+          <div style={{ fontFamily: FONTS.heading, fontSize: 18, fontWeight: 500, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {rock.common}
+          </div>
+          <div style={{ fontSize: 11, color: THEME.inkMuted, flexShrink: 0 }}>{formatEntryTime(entry)}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 4 }}>
+          <RockTypeChip rockType={rock.rock_type} />
+          <div style={{ fontSize: 12, color: THEME.inkMuted, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {entry.location}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+</script>
+
+<!-- ============================================================
+     SCREEN — SCAN (posts to /api/identify)
+     ============================================================ -->
+<script type="text/babel">
+function ScanScreen({ photoUrl, part, coords, tests, onComplete, onError }) {
+  const [progress, setProgress] = React.useState(0);
+  const [detected, setDetected] = React.useState([]);
+  const [statusLabel, setStatusLabel] = React.useState('Reading grain and texture…');
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const start = Date.now();
+
+    let raf;
+    const tick = () => {
+      if (cancelled) return;
+      const elapsed = (Date.now() - start) / 1000;
+      const t = Math.min(0.95, elapsed / 9);
+      setProgress(t);
+      if (t >= 0.3 && detected.length < 1) setDetected(['a']);
+      if (t >= 0.55 && detected.length < 2) setDetected(['a', 'b']);
+      if (t >= 0.8 && detected.length < 3) setDetected(['a', 'b', 'c']);
+      setStatusLabel(
+        t < 0.3  ? 'Reading grain and texture…'
+        : t < 0.55 ? 'Cross-referencing local bedrock…'
+        : t < 0.8  ? 'Narrowing to rock type…'
+        : 'Almost there.'
+      );
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+
+    (async () => {
+      try {
+        // Wait for coords (if promised) up to 6s
+        let resolvedCoords = null;
+        if (coords && typeof coords.then === 'function') {
+          resolvedCoords = await Promise.race([
+            coords,
+            new Promise(r => setTimeout(() => r(null), 6000)),
+          ]);
+        } else {
+          resolvedCoords = coords || null;
+        }
+
+        const res = await fetch('/api/identify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            image: photoUrl,
+            part: part || undefined,
+            coords: resolvedCoords || undefined,
+            tests: tests && Object.keys(tests).length ? tests : undefined,
+          }),
+        });
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          throw new Error(`Identify failed (${res.status}): ${text.slice(0, 200)}`);
+        }
+        const data = await res.json();
+        if (cancelled) return;
+        setProgress(1);
+        setStatusLabel('Done.');
+        setTimeout(() => !cancelled && onComplete(data, resolvedCoords), 220);
+      } catch (err) {
+        if (cancelled) return;
+        console.error(err);
+        onError(err.message || 'Identification failed');
+      }
+    })();
+
+    return () => { cancelled = true; cancelAnimationFrame(raf); };
+  }, []);
+
+  const markerAngles = [-60, 40, 140];
+
+  return (
+    <div style={{
+      width: '100%', height: '100%', position: 'relative',
+      background: `radial-gradient(circle at 50% 35%, ${THEME.accentDeep}, ${THEME.ink})`,
+      color: '#fff', fontFamily: FONTS.body, overflow: 'hidden',
+    }}>
+      {photoUrl && (
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: `center/cover url(${photoUrl})`,
+          filter: `blur(${(1 - progress) * 16 + 4}px) saturate(${0.3 + progress * 0.7})`,
+          opacity: 0.35,
+        }} />
+      )}
+      <div style={{
+        position: 'absolute', inset: 0,
+        background: `
+          radial-gradient(ellipse at 30% 20%, ${THEME.accentGlow}44 0%, transparent 55%),
+          radial-gradient(ellipse at 70% 60%, ${THEME.accent}66 0%, transparent 60%)
+        `,
+      }} />
+
+      <div style={{
+        position: 'relative', height: '60%',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+        <div style={{ position: 'relative', width: 260, height: 260 }}>
+          {[0, 1, 2].map(i => (
+            <div key={i} style={{
+              position: 'absolute', inset: 0, borderRadius: '50%',
+              border: `1.5px solid ${THEME.accentGlow}66`,
+              animation: `radarPulse 2s ${i * 0.5}s ease-out infinite`,
+            }} />
+          ))}
+          <svg viewBox="0 0 260 260" width="260" height="260" style={{
+            position: 'absolute', inset: 0,
+            animation: 'spin 2.4s linear infinite',
+          }}>
+            <defs>
+              <linearGradient id="scanbeam" x1="0" x2="1">
+                <stop offset="0%" stopColor={THEME.accentGlow} stopOpacity="0" />
+                <stop offset="100%" stopColor={THEME.accentGlow} stopOpacity="0.7" />
+              </linearGradient>
+            </defs>
+            <path d="M130 130 L 260 130 A 130 130 0 0 0 130 0 Z" fill="url(#scanbeam)" />
+          </svg>
+
+          <div style={{
+            position: 'absolute', inset: 55, borderRadius: '50%',
+            background: photoUrl ? `center/cover url(${photoUrl})` : `radial-gradient(circle, ${THEME.accent}, ${THEME.accentDeep})`,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            boxShadow: `0 0 40px ${THEME.accentGlow}66`,
+            overflow: 'hidden',
+          }}>
+            {!photoUrl && <IconRock size={64} stroke="#fff" sw={1.5} />}
+          </div>
+
+          {markerAngles.map((angle, i) => {
+            const visible = detected.length > i;
+            const rad = angle * Math.PI / 180;
+            const r = 130;
+            const x = 130 + Math.cos(rad) * r;
+            const y = 130 + Math.sin(rad) * r;
+            const label = ['Grain size', 'Composition', 'Texture'][i];
+            return (
+              <div key={i} style={{
+                position: 'absolute', left: x, top: y,
+                width: 12, height: 12, marginLeft: -6, marginTop: -6,
+                borderRadius: '50%', background: THEME.accentGlow,
+                boxShadow: `0 0 0 4px ${THEME.accentGlow}33`,
+                opacity: visible ? 1 : 0,
+                transform: `scale(${visible ? 1 : 0.2})`,
+                transition: 'all 400ms cubic-bezier(0.34, 1.6, 0.4, 1)',
+              }}>
+                <div style={{
+                  position: 'absolute', left: x > 130 ? 18 : 'auto', right: x <= 130 ? 18 : 'auto',
+                  top: -4, whiteSpace: 'nowrap',
+                  background: 'rgba(255,255,255,0.15)',
+                  backdropFilter: 'blur(10px)',
+                  color: '#fff', padding: '4px 10px', borderRadius: 999,
+                  fontSize: 11, fontWeight: 500,
+                }}>{label}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{
+        position: 'absolute', bottom: `calc(60px + env(safe-area-inset-bottom))`, left: 24, right: 24,
+        textAlign: 'center',
+      }}>
+        <div style={{
+          fontFamily: FONTS.heading, fontSize: 34, fontWeight: 500,
+          letterSpacing: -0.5, marginBottom: 8,
+        }}>{statusLabel}</div>
+        <div style={{
+          height: 3, background: 'rgba(255,255,255,0.15)', borderRadius: 3,
+          overflow: 'hidden', maxWidth: 240, margin: '0 auto',
+        }}>
+          <div style={{
+            height: '100%', width: `${progress * 100}%`,
+            background: THEME.accentGlow, transition: 'width 0.2s',
+          }} />
+        </div>
+        <div style={{ fontSize: 12, opacity: 0.6, marginTop: 10, letterSpacing: 0.5 }}>
+          {Math.round(progress * 100)}%  •  {detected.length} signals
+        </div>
+      </div>
+    </div>
+  );
+}
+</script>
+
+<!-- ============================================================
+     SCREEN — RESULTS
+     ============================================================ -->
+<script type="text/babel">
+function useWikipediaSummary(scientificName, commonName, enabled) {
+  const [state, setState] = React.useState({ loading: false, data: null, error: null });
+  React.useEffect(() => {
+    if (!enabled) { setState({ loading: false, data: null, error: null }); return; }
+    let cancelled = false;
+    const fetchSummary = async (title) => {
+      const res = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`, { headers: { Accept: 'application/json' } });
+      if (!res.ok) return null;
+      const d = await res.json();
+      if (d.type === 'disambiguation' || !d.extract) return null;
+      return d;
+    };
+    (async () => {
+      setState({ loading: true, data: null, error: null });
+      try {
+        let data = commonName ? await fetchSummary(commonName + ' (rock)') : null;
+        if (!data && commonName) data = await fetchSummary(commonName);
+        if (!data && scientificName) data = await fetchSummary(scientificName);
+        if (cancelled) return;
+        if (!data) setState({ loading: false, data: null, error: 'No Wikipedia article found.' });
+        else setState({ loading: false, data, error: null });
+      } catch (e) {
+        if (!cancelled) setState({ loading: false, data: null, error: e.message || 'Fetch failed' });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [scientificName, commonName, enabled]);
+  return state;
+}
+
+function WikipediaVerifySheet({ open, onClose, rock, photoUrl }) {
+  const { loading, data, error } = useWikipediaSummary(rock?.scientific, rock?.common, open);
+  if (!open) return null;
+  const wikiImg = data?.originalimage?.source || data?.thumbnail?.source || null;
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+      display: 'flex', alignItems: 'flex-end', zIndex: 100,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width: '100%', maxHeight: '92%', background: THEME.bg,
+        borderTopLeftRadius: 24, borderTopRightRadius: 24,
+        padding: '16px 18px calc(18px + env(safe-area-inset-bottom))',
+        overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 12,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontFamily: FONTS.heading, fontSize: 22, fontWeight: 500 }}>Verify match</div>
+          <button onClick={onClose} style={{
+            width: 34, height: 34, borderRadius: '50%',
+            background: THEME.surface, fontSize: 20, lineHeight: 1,
+          }}>×</button>
+        </div>
+        <div style={{ fontSize: 13, color: THEME.inkMuted }}>
+          Compare your photo with Wikipedia&apos;s reference for <b>{rock?.common}</b>. If they look different, try another match.
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div>
+            <div style={{ fontSize: 10, color: THEME.inkMuted, fontWeight: 700, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.8 }}>Your photo</div>
+            <div style={{
+              width: '100%', aspectRatio: '1 / 1', borderRadius: THEME.radiusSm,
+              background: photoUrl ? `#000 center/cover url(${photoUrl})` : THEME.surface,
+              boxShadow: THEME.shadow,
+            }} />
+          </div>
+          <div>
+            <div style={{ fontSize: 10, color: THEME.inkMuted, fontWeight: 700, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.8 }}>Wikipedia</div>
+            <div style={{
+              width: '100%', aspectRatio: '1 / 1', borderRadius: THEME.radiusSm,
+              background: wikiImg ? `#000 center/cover url(${wikiImg})` : THEME.surface,
+              boxShadow: THEME.shadow,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: THEME.inkMuted, fontSize: 11, padding: 10, textAlign: 'center',
+            }}>
+              {loading && 'Loading…'}
+              {!loading && !wikiImg && (error || 'No reference photo')}
+            </div>
+          </div>
+        </div>
+        {data && (
+          <div style={{
+            background: THEME.surface, borderRadius: THEME.radiusSm,
+            padding: 14, boxShadow: THEME.shadow,
+          }}>
+            <div style={{ fontFamily: FONTS.heading, fontSize: 17, fontWeight: 500 }}>{data.title}</div>
+            {data.description && <div style={{ fontSize: 12, color: THEME.inkMuted, marginTop: 2 }}>{data.description}</div>}
+            <div style={{ fontSize: 14, lineHeight: 1.45, marginTop: 8 }}>{data.extract}</div>
+            {data.content_urls?.desktop?.page && (
+              <a href={data.content_urls.desktop.page} target="_blank" rel="noopener noreferrer" style={{
+                display: 'inline-block', marginTop: 10,
+                color: THEME.accentDeep, fontSize: 13, fontWeight: 600, textDecoration: 'none',
+              }}>Read on Wikipedia ↗</a>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ResultsScreen({ photoUrl, matches, macrostrat, tests, rescanLoading, extraCount, onBack, onSelect, onSave, onRescan }) {
+  const [idx, setIdx] = React.useState(0);
+  const [saved, setSaved] = React.useState(false);
+  const [verifyOpen, setVerifyOpen] = React.useState(false);
+  const [testSheetOpen, setTestSheetOpen] = React.useState(false);
+  const extraPhotoRef = React.useRef(null);
+  const safeMatches = matches && matches.length ? matches : [];
+  const current = safeMatches[idx];
+  const topConf = safeMatches[0]?.conf ?? 0;
+
+  const handleExtraPhoto = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    try {
+      const dataUrl = await shrinkImage(file);
+      // Reset "saved" if user keeps refining
+      setSaved(false);
+      setIdx(0);
+      await onRescan({ extraPhoto: { dataUrl, part: 'fresh_break' } });
+    } catch (err) {
+      console.error('extra photo failed', err);
+      alert('Could not read that image.');
+    }
+  };
+
+  const handleApplyTests = async (newTests) => {
+    setTestSheetOpen(false);
+    setSaved(false);
+    setIdx(0);
+    await onRescan({ newTests });
+  };
+
+  if (!current) {
+    return (
+      <div style={{
+        width: '100%', height: '100%', background: THEME.bg, color: THEME.ink,
+        fontFamily: FONTS.body, display: 'flex', flexDirection: 'column',
+        alignItems: 'center', justifyContent: 'center', padding: 24, gap: 14, textAlign: 'center',
+      }}>
+        <div style={{ fontFamily: FONTS.heading, fontSize: 28 }}>No matches found</div>
+        <div style={{ color: THEME.inkMuted, fontSize: 14 }}>
+          Couldn&apos;t identify this specimen. Try a closer shot, a fresh break, or add quick tests.
+        </div>
+        <button onClick={onBack} style={{
+          marginTop: 8, padding: '12px 20px', borderRadius: THEME.radiusSm,
+          background: THEME.accent, color: '#fff', fontWeight: 700,
+        }}>Try again</button>
+      </div>
+    );
+  }
+
+  const handleSave = () => {
+    if (saved) return;
+    onSave(current);
+    setSaved(true);
+  };
+
+  const rock = current.rock;
+  return (
+    <div style={{
+      width: '100%', height: '100%', background: THEME.bg,
+      color: THEME.ink, fontFamily: FONTS.body,
+      display: 'flex', flexDirection: 'column', overflow: 'hidden',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: `calc(16px + env(safe-area-inset-top)) 16px 10px`,
+      }}>
+        <button onClick={onBack} style={{
+          width: 40, height: 40, borderRadius: '50%',
+          background: THEME.surface, boxShadow: THEME.shadow,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}><IconBack size={18} stroke={THEME.ink} /></button>
+        <div style={{ fontSize: 13, color: THEME.inkMuted, fontWeight: 500 }}>
+          {safeMatches.length} {safeMatches.length === 1 ? 'match' : 'matches'}
+        </div>
+        <button onClick={handleSave} style={{
+          width: 40, height: 40, borderRadius: '50%',
+          background: saved ? THEME.accent : THEME.surface,
+          color: saved ? '#fff' : THEME.ink, boxShadow: THEME.shadow,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}><IconBookmark size={18} stroke={saved ? '#fff' : THEME.ink} /></button>
+      </div>
+
+      <div style={{ padding: '0 20px 16px' }}>
+        <div style={{
+          position: 'relative', borderRadius: THEME.radius, overflow: 'hidden',
+          boxShadow: THEME.shadowLg, height: 280,
+        }}>
+          <RockImage rock={rock} size="100%" style={{ width: '100%', height: '100%' }} rounded={THEME.radius} photoUrl={photoUrl} />
+
+          <div style={{
+            position: 'absolute', top: 16, right: 16,
+            width: 64, height: 64,
+          }}>
+            <svg viewBox="0 0 64 64" width="64" height="64">
+              <circle cx="32" cy="32" r="28" fill="rgba(0,0,0,0.35)" />
+              <circle cx="32" cy="32" r="28" fill="none" stroke="rgba(255,255,255,0.25)" strokeWidth="3" />
+              <circle cx="32" cy="32" r="28" fill="none" stroke="#fff" strokeWidth="3"
+                strokeDasharray={`${current.conf * 176} 176`}
+                strokeLinecap="round"
+                transform="rotate(-90 32 32)" />
+              <text x="32" y="37" textAnchor="middle" fontSize="16" fontWeight="700" fill="#fff">
+                {Math.round(current.conf * 100)}
+              </text>
+            </svg>
+          </div>
+
+          <div style={{
+            position: 'absolute', left: 0, right: 0, bottom: 0,
+            padding: '40px 20px 16px',
+            background: 'linear-gradient(180deg, transparent, rgba(0,0,0,0.78))',
+            color: '#fff',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ fontSize: 11, opacity: 0.9, textTransform: 'uppercase', letterSpacing: 1.2, fontWeight: 600 }}>
+                Best match
+              </div>
+              {rock.rock_type && (
+                <div style={{
+                  fontSize: 10, fontWeight: 700, letterSpacing: 0.8, textTransform: 'uppercase',
+                  padding: '3px 8px', borderRadius: 999,
+                  background: 'rgba(255,255,255,0.18)', border: '1px solid rgba(255,255,255,0.35)',
+                }}>
+                  {paletteFor(rock.rock_type).emoji} {ROCK_TYPE_LABEL[rock.rock_type] || rock.rock_type}
+                </div>
+              )}
+            </div>
+            <div style={{ fontFamily: FONTS.heading, fontSize: 34, fontWeight: 500, lineHeight: 1.05, marginTop: 2 }}>
+              {rock.common}
+            </div>
+            {rock.scientific && rock.scientific !== '—' && (
+              <div style={{ fontSize: 13, fontStyle: 'italic', opacity: 0.9 }}>{rock.scientific}</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ padding: '0 20px 10px', display: 'flex', gap: 8 }}>
+        {safeMatches.map((m, i) => (
+          <button key={i} onClick={() => setIdx(i)} style={{
+            flex: 1,
+            background: i === idx ? THEME.accent : THEME.surface,
+            color: i === idx ? '#fff' : THEME.ink,
+            padding: '10px 8px', borderRadius: THEME.radiusSm,
+            boxShadow: THEME.shadow, textAlign: 'left',
+          }}>
+            <div style={{ fontSize: 10, opacity: 0.75, textTransform: 'uppercase', letterSpacing: 0.8 }}>
+              {Math.round(m.conf * 100)}% match
+            </div>
+            <div style={{ fontSize: 13, fontWeight: 600, fontFamily: FONTS.heading, lineHeight: 1.1 }}>
+              {m.rock.common}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <input
+        ref={extraPhotoRef} type="file" accept="image/*" capture="environment"
+        onChange={handleExtraPhoto}
+        style={{ position: 'absolute', width: 0, height: 0, opacity: 0 }}
+      />
+
+      {/* Everything between match tabs and bottom action buttons shares one
+          scroll region — otherwise each fixed-height block squeezes the
+          description area down to a sliver on short viewports. */}
+      <div style={{
+        flex: 1, minHeight: 0, overflow: 'auto',
+        display: 'flex', flexDirection: 'column',
+      }}>
+        {macrostrat && (
+          <div style={{ padding: '0 20px 8px' }}>
+            <div style={{
+              padding: '8px 12px', borderRadius: THEME.radiusTight,
+              background: THEME.surfaceAlt, fontSize: 11, color: THEME.inkMuted, lineHeight: 1.4,
+            }}>
+              <span style={{ fontWeight: 700, color: THEME.accentDeep }}>Local bedrock:</span>{' '}
+              {macrostrat.unit || macrostrat.lithology}
+              {macrostrat.age_top && ` · ${macrostrat.age_top}`}
+            </div>
+          </div>
+        )}
+
+        {rock.safety?.level === 'hazardous' && (
+          <div style={{ padding: '0 20px 10px' }}>
+            <div style={{
+              padding: '10px 12px', borderRadius: THEME.radiusSm,
+              background: '#FFE5E0', color: '#7A1F10', border: '1px solid #F3B7A9',
+              fontSize: 12, lineHeight: 1.4, fontWeight: 600,
+            }}>
+              ⚠ {rock.safety.note}
+            </div>
+          </div>
+        )}
+
+        {topConf < 0.65 && !rescanLoading && (
+          <div style={{ padding: '0 20px 10px' }}>
+            <div style={{
+              background: THEME.surface, borderRadius: THEME.radiusSm,
+              padding: 12, boxShadow: THEME.shadow,
+            }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: THEME.inkMuted, textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 }}>
+                Still unsure? {extraCount > 0 && <span>({extraCount} extra {extraCount === 1 ? 'photo' : 'photos'} used)</span>}
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => extraPhotoRef.current?.click()} style={{
+                  flex: 1, padding: '10px 10px', borderRadius: THEME.radiusTight,
+                  background: THEME.accent, color: '#fff', fontWeight: 700, fontSize: 12,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                }}>📷 Add fresh break</button>
+                <button onClick={() => setTestSheetOpen(true)} style={{
+                  flex: 1, padding: '10px 10px', borderRadius: THEME.radiusTight,
+                  background: THEME.accentSoft, color: THEME.accentDeep, fontWeight: 700, fontSize: 12,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                }}>🧪 Run a test</button>
+              </div>
+            </div>
+          </div>
+        )}
+        {rescanLoading && (
+          <div style={{ padding: '0 20px 10px' }}>
+            <div style={{
+              padding: '10px 12px', borderRadius: THEME.radiusSm,
+              background: THEME.accentSoft, color: THEME.accentDeep,
+              fontSize: 12, fontWeight: 600, textAlign: 'center',
+            }}>
+              Re-identifying with the new info…
+            </div>
+          </div>
+        )}
+
+        <div style={{ padding: '0 20px 10px' }}>
+          <button onClick={() => setVerifyOpen(true)} style={{
+            width: '100%', padding: '12px 14px', borderRadius: THEME.radiusSm,
+            background: THEME.accentSoft, color: THEME.accentDeep,
+            fontWeight: 700, fontSize: 13,
+            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+          }}>Verify on Wikipedia ↗</button>
+        </div>
+
+        <div style={{ padding: '0 20px 14px' }}>
+          <div style={{
+            display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14,
+          }}>
+            <FactCell icon={<IconShield size={18} stroke={THEME.ink} />} label="Handling"
+              value={<SafetyBadge level={rock.safety?.level || 'unknown'} />} />
+            <FactCell icon={<IconHammer size={18} stroke={THEME.ink} />} label="Hardness"
+              value={<span style={{ fontSize: 13, fontWeight: 600 }}>{rock.hardness || '—'}</span>} />
+          </div>
+          <div style={{
+            background: THEME.surface, borderRadius: THEME.radiusSm,
+            padding: 14, boxShadow: THEME.shadow,
+          }}>
+            <div style={{ fontSize: 14, lineHeight: 1.45, color: THEME.ink }}>
+              {rock.tagline}
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
+              {(rock.tags || []).map(t => (
+                <span key={t} style={{
+                  background: THEME.accentSoft, color: THEME.accentDeep,
+                  fontSize: 11, fontWeight: 600, padding: '4px 9px',
+                  borderRadius: 999,
+                }}>{t}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ padding: '10px 20px calc(20px + env(safe-area-inset-bottom))', display: 'flex', gap: 10 }}>
+        <button onClick={handleSave} style={{
+          flex: 1, height: 52, borderRadius: THEME.radiusSm,
+          background: saved ? THEME.accentSoft : THEME.surface, boxShadow: THEME.shadow,
+          fontWeight: 600, color: THEME.ink, fontSize: 14,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+        }}>
+          <IconPlus size={16} stroke={THEME.ink} /> {saved ? 'Saved' : 'Save'}
+        </button>
+        <button onClick={() => onSelect(current)} style={{
+          flex: 2, height: 52, borderRadius: THEME.radiusSm,
+          background: THEME.accent, color: '#fff',
+          fontWeight: 700, fontSize: 15,
+        }}>Full profile →</button>
+      </div>
+
+      <WikipediaVerifySheet
+        open={verifyOpen}
+        onClose={() => setVerifyOpen(false)}
+        rock={rock}
+        photoUrl={photoUrl}
+      />
+
+      <TestSheet
+        open={testSheetOpen}
+        tests={tests || {}}
+        onClose={() => setTestSheetOpen(false)}
+        onApply={handleApplyTests}
+      />
+    </div>
+  );
+}
+</script>
+
+<!-- ============================================================
+     SCREEN — DETAIL (overview / tests / similar)
+     ============================================================ -->
+<script type="text/babel">
+function IdSwapSheet({ open, title, subtitle, matches, loading, error, onClose, onPick }) {
+  if (!open) return null;
+  return (
+    <div onClick={onClose} style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+      display: 'flex', alignItems: 'flex-end', zIndex: 120,
+    }}>
+      <div onClick={e => e.stopPropagation()} style={{
+        width: '100%', maxHeight: '92%', background: THEME.bg,
+        borderTopLeftRadius: 24, borderTopRightRadius: 24,
+        padding: '16px 18px calc(18px + env(safe-area-inset-bottom))',
+        overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 12,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontFamily: FONTS.heading, fontSize: 22, fontWeight: 500 }}>{title}</div>
+          <button onClick={onClose} style={{
+            width: 34, height: 34, borderRadius: '50%',
+            background: THEME.surface, fontSize: 20, lineHeight: 1,
+          }}>×</button>
+        </div>
+        {subtitle && <div style={{ fontSize: 13, color: THEME.inkMuted }}>{subtitle}</div>}
+        {loading && <div style={{ textAlign: 'center', padding: '24px 0', color: THEME.inkMuted, fontSize: 14 }}>Asking Claude to take another look…</div>}
+        {error && !loading && (
+          <div style={{
+            background: '#FFE5E0', color: '#7A1F10', padding: '10px 12px',
+            borderRadius: THEME.radiusSm, fontSize: 13,
+          }}>{error}</div>
+        )}
+        {!loading && matches && matches.length > 0 && matches.map((m, i) => (
+          <button key={i} onClick={() => onPick(m)} style={{
+            width: '100%', textAlign: 'left',
+            background: THEME.surface, boxShadow: THEME.shadow,
+            padding: 14, borderRadius: THEME.radiusSm,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+              <div style={{ fontFamily: FONTS.heading, fontSize: 18, fontWeight: 500 }}>
+                {m.rock?.common || '—'}
+              </div>
+              {typeof m.conf === 'number' && (
+                <div style={{ fontSize: 11, color: THEME.inkMuted, flexShrink: 0 }}>
+                  {Math.round(m.conf * 100)}% match
+                </div>
+              )}
+            </div>
+            {m.rock?.scientific && m.rock.scientific !== '—' && (
+              <div style={{ fontSize: 12, fontStyle: 'italic', color: THEME.inkMuted }}>{m.rock.scientific}</div>
+            )}
+            <div style={{ marginTop: 6, display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+              {m.rock?.rock_type && <RockTypeChip rockType={m.rock.rock_type} />}
+              {m.rock?.tagline && <span style={{ fontSize: 12, lineHeight: 1.35 }}>{m.rock.tagline}</span>}
+            </div>
+            <div style={{ marginTop: 10, fontSize: 12, color: THEME.accentDeep, fontWeight: 700 }}>Use this one →</div>
+          </button>
+        ))}
+        {!loading && (!matches || matches.length === 0) && !error && (
+          <div style={{
+            background: THEME.surface, padding: 14, borderRadius: THEME.radiusSm,
+            color: THEME.inkMuted, fontSize: 13, textAlign: 'center',
+          }}>No alternatives available.</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function DetailScreen({ rock, photoUrl, onBack, journalId, onDelete, entry, onEntryUpdated, setToast }) {
+  const [tab, setTab] = React.useState('overview');
+  const [deleting, setDeleting] = React.useState(false);
+  const [sheetMode, setSheetMode] = React.useState(null);
+  const [freshMatches, setFreshMatches] = React.useState([]);
+  const [reidLoading, setReidLoading] = React.useState(false);
+  const [reidError, setReidError] = React.useState(null);
+  if (!rock) return null;
+
+  const handleDelete = async () => {
+    if (deleting) return;
+    if (!confirm(`Remove "${rock.common}" from your journal?`)) return;
+    setDeleting(true);
+    try { await onDelete(journalId); }
+    catch (e) { setDeleting(false); alert('Delete failed: ' + e.message); }
+  };
+
+  const storedAlternatives = (entry && Array.isArray(entry.alternatives)) ? entry.alternatives : [];
+
+  const openAlternatives = () => {
+    setReidError(null); setFreshMatches([]); setSheetMode('alts');
+  };
+  const openReidentify = async () => {
+    setSheetMode('reid'); setReidLoading(true); setReidError(null); setFreshMatches([]);
+    try {
+      const data = await apiReidentifyEntry(journalId, {
+        coords: entry?.coords || undefined,
+      });
+      const normalised = (data.matches || []).map(normaliseMatch);
+      setFreshMatches(normalised);
+    } catch (e) {
+      setReidError(e.message || 'Re-identify failed');
+    } finally {
+      setReidLoading(false);
+    }
+  };
+
+  const handlePick = async (picked) => {
+    if (!picked || !picked.rock) return;
+    try {
+      const sourceList = sheetMode === 'reid' ? freshMatches : storedAlternatives;
+      const newAlts = [
+        { rock, conf: null },
+        ...sourceList.filter(m => m && m.rock && m.rock.id !== picked.rock.id),
+      ].slice(0, 5);
+      await apiPatchEntry(journalId, { rock: picked.rock, alternatives: newAlts });
+      if (onEntryUpdated) await onEntryUpdated(picked.rock);
+      setSheetMode(null);
+      if (setToast) setToast('ID updated');
+    } catch (e) {
+      if (setToast) setToast(`Update failed: ${e.message}`);
+    }
+  };
+
+  return (
+    <div style={{
+      width: '100%', height: '100%', background: THEME.bg,
+      color: THEME.ink, fontFamily: FONTS.body,
+      display: 'flex', flexDirection: 'column', overflow: 'hidden',
+    }}>
+      <div style={{ position: 'relative', height: 340, flexShrink: 0 }}>
+        <RockImage rock={rock} size="100%" rounded={0}
+          photoUrl={photoUrl}
+          style={{ width: '100%', height: '100%', borderRadius: 0 }} />
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'linear-gradient(180deg, rgba(0,0,0,0.25) 0%, transparent 30%, rgba(0,0,0,0.65) 100%)',
+        }} />
+        <div style={{
+          position: 'absolute', top: `calc(12px + env(safe-area-inset-top))`, left: 16, right: 16,
+          display: 'flex', justifyContent: 'space-between', zIndex: 10,
+        }}>
+          <button onClick={onBack} style={{
+            width: 40, height: 40, borderRadius: '50%',
+            background: 'rgba(255,255,255,0.9)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}><IconBack size={18} stroke={THEME.ink} /></button>
+          {journalId ? (
+            <button onClick={handleDelete} disabled={deleting} style={{
+              width: 40, height: 40, borderRadius: '50%',
+              background: 'rgba(255,255,255,0.9)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              opacity: deleting ? 0.5 : 1,
+            }}><IconTrash size={18} stroke="#B3261E" /></button>
+          ) : (
+            <button style={{
+              width: 40, height: 40, borderRadius: '50%',
+              background: 'rgba(255,255,255,0.9)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}><IconBookmark size={18} stroke={THEME.ink} /></button>
+          )}
+        </div>
+        <div style={{ position: 'absolute', bottom: 16, left: 20, right: 20, color: '#fff' }}>
+          <SafetyBadge level={rock.safety?.level || 'unknown'} />
+          <div style={{
+            fontFamily: FONTS.heading, fontSize: 40, fontWeight: 500,
+            lineHeight: 1.02, marginTop: 8, letterSpacing: -0.5,
+          }}>{rock.common}</div>
+          <div style={{ fontStyle: 'italic', fontSize: 14, opacity: 0.9 }}>
+            {[rock.scientific && rock.scientific !== '—' ? rock.scientific : null, ROCK_TYPE_LABEL[rock.rock_type]].filter(Boolean).join(' · ')}
+          </div>
+        </div>
+      </div>
+
+      {journalId && (
+        <div style={{ display: 'flex', gap: 8, padding: '12px 16px 4px', flexShrink: 0 }}>
+          <button onClick={openAlternatives} disabled={storedAlternatives.length === 0} style={{
+            flex: 1, padding: '10px 12px', borderRadius: THEME.radiusSm,
+            background: storedAlternatives.length ? THEME.accentSoft : THEME.surface,
+            color: storedAlternatives.length ? THEME.accentDeep : THEME.inkMuted,
+            fontSize: 12, fontWeight: 700,
+            cursor: storedAlternatives.length ? 'pointer' : 'default',
+          }}>
+            View alternatives{storedAlternatives.length ? ` (${storedAlternatives.length})` : ''}
+          </button>
+          <button onClick={openReidentify} style={{
+            flex: 1, padding: '10px 12px', borderRadius: THEME.radiusSm,
+            background: THEME.accent, color: '#fff',
+            fontSize: 12, fontWeight: 700,
+          }}>Update this capture</button>
+        </div>
+      )}
+
+      <div style={{
+        display: 'flex', padding: '0 20px', gap: 4,
+        borderBottom: `1px solid ${THEME.accentSoft}`, flexShrink: 0,
+      }}>
+        {['overview', 'tests', 'similar'].map(t => (
+          <button key={t} onClick={() => setTab(t)} style={{
+            flex: 1, padding: '14px 6px',
+            fontWeight: 600, fontSize: 13,
+            color: tab === t ? THEME.accent : THEME.inkMuted,
+            textTransform: 'capitalize',
+            borderBottom: `2px solid ${tab === t ? THEME.accent : 'transparent'}`,
+            marginBottom: -1,
+          }}>{t}</button>
+        ))}
+      </div>
+
+      <div style={{ flex: 1, overflow: 'auto', padding: '16px 20px calc(24px + env(safe-area-inset-bottom))' }}>
+        {tab === 'overview' && <OverviewTab rock={rock} entry={entry} />}
+        {tab === 'tests' && <TestsTab rock={rock} />}
+        {tab === 'similar' && <SimilarTab rock={rock} />}
+      </div>
+
+      <IdSwapSheet
+        open={sheetMode === 'alts'}
+        title="Other matches from this scan"
+        subtitle={`Claude returned these alongside "${rock.common}". Tap one to make it the active ID.`}
+        matches={storedAlternatives}
+        onClose={() => setSheetMode(null)}
+        onPick={handlePick}
+      />
+      <IdSwapSheet
+        open={sheetMode === 'reid'}
+        title="Re-identify this capture"
+        subtitle="Asking Claude to take a fresh look at the stored photo with your location context. Pick any match to update the entry."
+        matches={freshMatches}
+        loading={reidLoading}
+        error={reidError}
+        onClose={() => setSheetMode(null)}
+        onPick={handlePick}
+      />
+    </div>
+  );
+}
+
+function OverviewTab({ rock, entry }) {
+  const bedrock = entry?.macrostrat;
+  return (
+    <div>
+      <p style={{ fontSize: 15, lineHeight: 1.5, margin: '0 0 14px' }}>
+        {rock.description || rock.tagline}
+      </p>
+      {(Array.isArray(rock.classification) && rock.classification.length > 0) || rock.sub_type ? (
+        <div style={{
+          background: THEME.surfaceAlt, borderRadius: THEME.radiusSm,
+          padding: '10px 14px', marginBottom: 12,
+        }}>
+          {Array.isArray(rock.classification) && rock.classification.length > 0 && (
+            <div style={{ fontSize: 13, fontFamily: FONTS.mono, color: THEME.ink }}>
+              {rock.classification.join(' › ')}
+            </div>
+          )}
+          {rock.sub_type && (
+            <div style={{ fontSize: 12, color: THEME.inkMuted, marginTop: 4, fontStyle: 'italic' }}>
+              {rock.sub_type}
+            </div>
+          )}
+        </div>
+      ) : null}
+      {Array.isArray(rock.tags) && rock.tags.length > 0 && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+          {rock.tags.map(t => (
+            <span key={t} style={{
+              background: THEME.accentSoft, color: THEME.accentDeep,
+              fontSize: 11, fontWeight: 600, padding: '4px 9px',
+              borderRadius: 999,
+            }}>{t}</span>
+          ))}
+        </div>
+      )}
+      <Row label="Formation" value={rock.formation || '—'} />
+      <Row label="Typical age" value={rock.age_typical || '—'} />
+      <Row label="Texture" value={rock.texture || '—'} />
+      <Row label="Hardness (Mohs)" value={rock.hardness || '—'} />
+      {rock.uses && rock.uses !== '—' && <Row label="Notable uses" value={rock.uses} />}
+
+      {Array.isArray(rock.composition) && rock.composition.length > 0 && (
+        <>
+          <SectionTitle>Composition</SectionTitle>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {rock.composition.map((c, i) => (
+              <span key={i} style={{
+                background: THEME.surface, color: THEME.ink,
+                fontSize: 12, fontWeight: 500, padding: '6px 11px',
+                borderRadius: 999, boxShadow: THEME.shadow,
+              }}>{c}</span>
+            ))}
+          </div>
+        </>
+      )}
+
+      <SectionTitle>Handling</SectionTitle>
+      <div style={{
+        background: rock.safety?.level === 'safe' ? '#e8f3e4' :
+          rock.safety?.level === 'caution' ? '#fde8d0' : '#fae0dd',
+        borderLeft: `3px solid ${rock.safety?.level === 'safe' ? '#3a7a3a' :
+          rock.safety?.level === 'caution' ? '#d47a2a' : '#c94a3a'}`,
+        padding: 14, borderRadius: THEME.radiusTight,
+        fontSize: 13, lineHeight: 1.5,
+      }}>
+        {rock.safety?.note || 'No handling notes.'}
+      </div>
+
+      {bedrock && (
+        <>
+          <SectionTitle>Local bedrock context</SectionTitle>
+          <div style={{
+            background: THEME.surface, borderRadius: THEME.radiusSm,
+            padding: 14, boxShadow: THEME.shadow,
+          }}>
+            <div style={{ fontSize: 13, fontWeight: 600 }}>{bedrock.unit || bedrock.lithology}</div>
+            {bedrock.age_top && (
+              <div style={{ fontSize: 11, color: THEME.inkMuted, marginTop: 2, fontFamily: FONTS.mono }}>
+                {bedrock.age_bottom ? `${bedrock.age_bottom} – ${bedrock.age_top}` : bedrock.age_top}
+              </div>
+            )}
+            {bedrock.description && (
+              <div style={{ fontSize: 12, lineHeight: 1.5, marginTop: 8, color: THEME.ink }}>
+                {bedrock.description}
+              </div>
+            )}
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              marginTop: 8, gap: 8,
+            }}>
+              <div style={{ fontSize: 10, color: THEME.inkMuted }}>
+                via {bedrock.source === 'bgs' ? 'British Geological Survey' : 'Macrostrat'}
+              </div>
+              {bedrock.learn_more_url && (
+                <a
+                  href={bedrock.learn_more_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    fontSize: 11, fontWeight: 700, color: THEME.accentDeep,
+                    textDecoration: 'none',
+                  }}
+                >Learn more ↗</a>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function TestsTab({ rock }) {
+  const tests = Array.isArray(rock.diagnostic_tests) ? rock.diagnostic_tests : [];
+  if (tests.length === 0) {
+    return (
+      <div style={{
+        background: THEME.surface, borderRadius: THEME.radiusSm,
+        padding: 18, boxShadow: THEME.shadow,
+        fontSize: 14, color: THEME.inkMuted, lineHeight: 1.5, textAlign: 'center',
+      }}>
+        No specific field tests suggested for this match.
+      </div>
+    );
+  }
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ fontSize: 13, color: THEME.inkMuted, lineHeight: 1.5, marginBottom: 4 }}>
+        Run these to <b>confirm</b> the identification. If a result conflicts, the match is likely wrong — try an alternative.
+      </div>
+      {tests.map((t, i) => (
+        <div key={i} style={{
+          background: THEME.surface, borderRadius: THEME.radiusSm,
+          padding: 14, boxShadow: THEME.shadow,
+        }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6,
+          }}>
+            <div style={{
+              width: 28, height: 28, borderRadius: '50%',
+              background: THEME.accentSoft, color: THEME.accentDeep,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              fontWeight: 700, fontSize: 14,
+            }}>{i + 1}</div>
+            <div style={{ fontFamily: FONTS.heading, fontSize: 17, fontWeight: 500 }}>{t.test}</div>
+          </div>
+          <div style={{ fontSize: 13, lineHeight: 1.5, marginLeft: 36 }}>
+            <div><b>Expected:</b> {t.expected_result}</div>
+            {t.why_it_helps && (
+              <div style={{ color: THEME.inkMuted, marginTop: 4 }}>
+                <b>Why:</b> {t.why_it_helps}
+              </div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SimilarTab({ rock }) {
+  const sims = Array.isArray(rock.similarDetail) ? rock.similarDetail : [];
+  if (sims.length === 0) {
+    return (
+      <div style={{
+        background: THEME.surface, borderRadius: THEME.radiusSm,
+        padding: 18, boxShadow: THEME.shadow,
+        fontSize: 14, color: THEME.inkMuted, lineHeight: 1.5, textAlign: 'center',
+      }}>
+        No look-alikes suggested for this match.
+      </div>
+    );
+  }
+  const openWiki = (name) => {
+    if (!name) return;
+    const url = `https://en.wikipedia.org/wiki/${encodeURIComponent(name.replace(/ /g, '_'))}`;
+    window.open(url, '_blank', 'noopener,noreferrer');
+  };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {sims.map((s, i) => (
+        <div key={i} onClick={() => openWiki(s.common || s.name)} style={{
+          padding: 14, background: THEME.surface,
+          borderRadius: THEME.radiusSm, boxShadow: THEME.shadow,
+          cursor: (s.common || s.name) ? 'pointer' : 'default',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', gap: 8 }}>
+            <div style={{ fontFamily: FONTS.heading, fontSize: 19, fontWeight: 500, lineHeight: 1.1 }}>
+              {s.common}
+            </div>
+            {(s.common || s.name) && (
+              <div style={{ fontSize: 11, color: THEME.accentDeep, fontWeight: 600, flexShrink: 0 }}>Wiki ↗</div>
+            )}
+          </div>
+          {s.name && s.name !== s.common && (
+            <div style={{ fontSize: 12, fontStyle: 'italic', color: THEME.inkMuted, marginTop: 2 }}>{s.name}</div>
+          )}
+          {s.differentiator && (
+            <div style={{ fontSize: 13, marginTop: 8, lineHeight: 1.45 }}>
+              <span style={{ fontWeight: 600, color: THEME.accentDeep }}>How to tell apart: </span>
+              {s.differentiator}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function Row({ label, value }) {
+  return (
+    <div style={{
+      display: 'flex', justifyContent: 'space-between', gap: 16,
+      padding: '10px 0',
+      borderBottom: `1px solid ${THEME.accentSoft}55`,
+      fontSize: 13,
+    }}>
+      <div style={{ color: THEME.inkMuted, fontWeight: 500, flexShrink: 0 }}>{label}</div>
+      <div style={{ textAlign: 'right', fontWeight: 500 }}>{value}</div>
+    </div>
+  );
+}
+
+function SectionTitle({ children }) {
+  return (
+    <h3 style={{
+      fontFamily: FONTS.heading, fontSize: 22, fontWeight: 500,
+      margin: '22px 0 10px', letterSpacing: -0.2,
+    }}>{children}</h3>
+  );
+}
+</script>
+
+<!-- ============================================================
+     SCREEN — JOURNAL
+     ============================================================ -->
+<script type="text/babel">
+const FILTERS = [
+  'All', 'Safe', 'Hazardous',
+  'Igneous', 'Sedimentary', 'Metamorphic', 'Minerals', 'Fossils', 'Meteorites',
+];
+const FILTER_TO_TYPE = {
+  Igneous: 'igneous', Sedimentary: 'sedimentary', Metamorphic: 'metamorphic',
+  Minerals: 'mineral', Fossils: 'fossil', Meteorites: 'meteorite',
+};
+
+function applyJournalFilter(entries, filter) {
+  if (filter === 'All') return entries;
+  const want = FILTER_TO_TYPE[filter];
+  return entries.filter(e => {
+    const rock = e.rock;
+    if (!rock) return false;
+    if (want) return (rock.rock_type || 'other') === want;
+    if (filter === 'Safe') return rock.safety?.level === 'safe';
+    if (filter === 'Hazardous') return rock.safety?.level === 'hazardous' || rock.safety?.level === 'caution';
+    return true;
+  });
+}
+
+function JournalScreen({ entries, loaded, onBack, onSelect, onDeleted, setToast }) {
+  const [filter, setFilter] = React.useState('All');
+
+  const removeEntry = async (id) => {
+    try {
+      await apiDeleteEntry(id);
+      if (onDeleted) onDeleted();
+    } catch (e) {
+      if (setToast) setToast(`Delete failed: ${e.message}`);
+    }
+  };
+
+  const filtered = applyJournalFilter(entries, filter);
+  const safeCount = entries.filter(e => e.rock?.safety?.level === 'safe').length;
+  const specimens = entries.length;
+  const typesCount = new Set(entries.map(e => e.rock?.rock_type).filter(Boolean)).size;
+
+  return (
+    <div style={{
+      width: '100%', height: '100%', background: THEME.bg,
+      color: THEME.ink, fontFamily: FONTS.body,
+      display: 'flex', flexDirection: 'column', overflow: 'hidden',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: `calc(16px + env(safe-area-inset-top)) 16px 10px`,
+      }}>
+        <button onClick={onBack} style={{
+          width: 40, height: 40, borderRadius: '50%',
+          background: THEME.surface, boxShadow: THEME.shadow,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}><IconBack size={18} stroke={THEME.ink} /></button>
+        <div style={{ flex: 1 }}>
+          <div style={{
+            fontFamily: FONTS.heading, fontSize: 32, fontWeight: 500,
+            letterSpacing: -0.3, lineHeight: 1,
+          }}>My field journal</div>
+          <div style={{ fontSize: 12, color: THEME.inkMuted, marginTop: 2 }}>
+            {entries.length} {entries.length === 1 ? 'specimen' : 'specimens'}
+          </div>
+        </div>
+      </div>
+
+      <div style={{
+        display: 'flex', gap: 8, padding: '0 16px 14px', overflowX: 'auto',
+        flexShrink: 0,
+      }}>
+        {FILTERS.map((f) => {
+          const active = filter === f;
+          return (
+            <button key={f} onClick={() => setFilter(f)} style={{
+              padding: '8px 14px', borderRadius: 999, flexShrink: 0,
+              background: active ? THEME.accent : THEME.surface,
+              color: active ? '#fff' : THEME.ink,
+              fontSize: 13, fontWeight: 600,
+              boxShadow: active ? 'none' : THEME.shadow,
+            }}>{f}</button>
+          );
+        })}
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, padding: '0 16px 14px', flexShrink: 0 }}>
+        <StatBox label="Specimens" value={specimens.toString()} />
+        <StatBox label="Rock types" value={typesCount.toString()} />
+        <StatBox label="Safe" value={safeCount.toString()} />
+      </div>
+
+      <div style={{ flex: 1, overflow: 'auto', padding: '0 16px calc(20px + env(safe-area-inset-bottom))' }}>
+        {!loaded ? (
+          <div style={{
+            textAlign: 'center', color: THEME.inkMuted, fontSize: 14,
+            padding: '40px 20px',
+          }}>Loading your journal…</div>
+        ) : entries.length === 0 ? (
+          <div style={{
+            textAlign: 'center', color: THEME.inkMuted, fontSize: 14,
+            padding: '40px 20px', lineHeight: 1.5,
+          }}>
+            Nothing here yet. Tap the capture button on the home screen and your saved finds will land here.
+          </div>
+        ) : filtered.length === 0 ? (
+          <div style={{
+            textAlign: 'center', color: THEME.inkMuted, fontSize: 14,
+            padding: '30px 20px', lineHeight: 1.5,
+          }}>
+            No {filter.toLowerCase()} entries.
+          </div>
+        ) : filtered.map((j, i) => {
+          const rock = j.rock;
+          if (!rock) return null;
+          return (
+            <div key={j.id || i} onClick={() => onSelect(j)} style={{
+              background: THEME.surface, borderRadius: THEME.radiusSm,
+              padding: 14, marginBottom: 10, boxShadow: THEME.shadow,
+              display: 'flex', gap: 14, cursor: 'pointer', position: 'relative',
+            }}>
+              <RockImage rock={rock} size={72} rounded={THEME.radiusTight} photoUrl={j.photoUrl} />
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                  <div style={{ fontFamily: FONTS.heading, fontSize: 22, fontWeight: 500, lineHeight: 1.05 }}>
+                    {rock.common}
+                  </div>
+                  <div style={{ fontSize: 11, color: THEME.inkMuted, flexShrink: 0, marginLeft: 8 }}>{formatEntryTime(j)}</div>
+                </div>
+                {rock.scientific && rock.scientific !== '—' && (
+                  <div style={{ fontSize: 11, fontStyle: 'italic', color: THEME.inkMuted }}>{rock.scientific}</div>
+                )}
+                <div style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <RockTypeChip rockType={rock.rock_type} />
+                  {rock.safety?.level && rock.safety.level !== 'safe' && (
+                    <SafetyBadge level={rock.safety.level} small />
+                  )}
+                </div>
+                {j.note && (
+                  <div style={{ fontSize: 12, marginTop: 6, lineHeight: 1.35 }}>&quot;{j.note}&quot;</div>
+                )}
+                {j.location && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 4, fontSize: 11,
+                    color: THEME.inkMuted, marginTop: 6,
+                  }}>
+                    <IconPin size={11} stroke={THEME.inkMuted} /> {j.location}
+                  </div>
+                )}
+              </div>
+              <button onClick={(e) => { e.stopPropagation(); if (confirm(`Remove "${rock.common}" from your journal?`)) removeEntry(j.id); }} style={{
+                position: 'absolute', bottom: 8, right: 8,
+                width: 32, height: 32, borderRadius: '50%',
+                background: THEME.bg, boxShadow: THEME.shadow,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <IconTrash size={14} stroke="#B3261E" />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function StatBox({ label, value }) {
+  return (
+    <div style={{
+      flex: 1, background: THEME.surface, borderRadius: THEME.radiusSm,
+      padding: '10px 12px', boxShadow: THEME.shadow,
+    }}>
+      <div style={{
+        fontSize: 10, color: THEME.inkMuted, textTransform: 'uppercase',
+        fontWeight: 600, letterSpacing: 0.5,
+      }}>{label}</div>
+      <div style={{
+        fontFamily: FONTS.heading, fontSize: 30, fontWeight: 500, lineHeight: 1,
+      }}>{value}</div>
+    </div>
+  );
+}
+</script>
+
+<!-- ============================================================
+     SCREEN — MAP (pinned discoveries)
+     ============================================================ -->
+<script type="text/babel">
+function buildEntryIcon(entry) {
+  const t = entry?.rock?.rock_type || 'other';
+  const pal = paletteFor(t);
+  return L.divIcon({
+    className: 'geolyssa-marker',
+    html: `<div style="width:38px;height:38px;background:#fff;border:3px solid ${pal.b};border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 3px 8px rgba(0,0,0,0.35);font-size:20px;line-height:1">${pal.emoji}</div>`,
+    iconSize: [38, 38],
+    iconAnchor: [19, 19],
+    popupAnchor: [0, -20],
+  });
+}
+
+function buildUserIcon() {
+  return L.divIcon({
+    className: 'geolyssa-user-marker',
+    html: `<div style="position:relative;width:18px;height:18px"><div style="position:absolute;inset:0;background:#8C5A3A;border:3px solid #fff;border-radius:50%;box-shadow:0 0 0 6px rgba(140,90,58,0.25)"></div></div>`,
+    iconSize: [18, 18],
+    iconAnchor: [9, 9],
+  });
+}
+
+function MapScreen({ entries = [], onBack, onSelect }) {
+  const mapRef = React.useRef(null);
+  const mapInstance = React.useRef(null);
+  const entryLayer = React.useRef(null);
+  const userMarker = React.useRef(null);
+  const userLatLng = React.useRef(null);
+  const fittedOnce = React.useRef(false);
+
+  const withCoords = React.useMemo(() => entries.filter(e =>
+    e.coords && typeof e.coords.lat === 'number' && typeof e.coords.lng === 'number'
+  ), [entries]);
+
+  React.useEffect(() => {
+    if (!mapRef.current || mapInstance.current) return;
+    if (typeof L === 'undefined') return;
+
+    L.Icon.Default.imagePath = 'https://unpkg.com/leaflet@1.9.4/dist/images/';
+    const map = L.map(mapRef.current, { zoomControl: true, attributionControl: true })
+      .setView([20, 0], 2);
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+    }).addTo(map);
+    mapInstance.current = map;
+    entryLayer.current = L.layerGroup().addTo(map);
+
+    const invalidate = () => map.invalidateSize();
+    const raf = requestAnimationFrame(() => { invalidate(); setTimeout(invalidate, 120); });
+    window.addEventListener('resize', invalidate);
+    window.addEventListener('orientationchange', invalidate);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', invalidate);
+      window.removeEventListener('orientationchange', invalidate);
+      map.remove();
+      mapInstance.current = null;
+      entryLayer.current = null;
+      userMarker.current = null;
+    };
+  }, []);
+
+  React.useEffect(() => {
+    const map = mapInstance.current;
+    const layer = entryLayer.current;
+    if (!map || !layer) return;
+    layer.clearLayers();
+
+    withCoords.forEach((e) => {
+      const marker = L.marker([e.coords.lat, e.coords.lng], { icon: buildEntryIcon(e) });
+      const name = (e.rock?.common || 'Unknown').replace(/</g, '&lt;');
+      const sci = (e.rock?.scientific || '').replace(/</g, '&lt;');
+      const date = formatEntryTime(e).replace(/</g, '&lt;');
+      const img = e.photoUrl
+        ? `<div style="width:180px;height:110px;background:#000 center/cover url(${e.photoUrl});border-radius:6px;margin-bottom:6px"></div>`
+        : '';
+      const html = `
+        ${img}
+        <div style="font-weight:700;font-size:14px">${name}</div>
+        <div style="font-style:italic;color:#7A6E5D;font-size:12px">${sci}</div>
+        <div style="font-size:11px;margin-top:4px;color:#7A6E5D">${date}</div>
+        <button data-entry-id="${e.id}" style="margin-top:8px;padding:6px 12px;border:none;background:#8C5A3A;color:#fff;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;width:100%">Open →</button>
+      `;
+      marker.bindPopup(L.popup({ maxWidth: 220 }).setContent(html));
+      marker.on('popupopen', () => {
+        const btn = document.querySelector(`button[data-entry-id="${e.id}"]`);
+        if (btn) btn.addEventListener('click', () => onSelect(e), { once: true });
+      });
+      marker.addTo(layer);
+    });
+
+    if (!fittedOnce.current && withCoords.length) {
+      try {
+        const group = L.featureGroup(layer.getLayers());
+        map.fitBounds(group.getBounds().pad(0.25), { maxZoom: 15 });
+        fittedOnce.current = true;
+      } catch {}
+    }
+  }, [withCoords, onSelect]);
+
+  React.useEffect(() => {
+    if (!navigator.geolocation) return;
+    let cancelled = false;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (cancelled || !mapInstance.current) return;
+        userLatLng.current = [pos.coords.latitude, pos.coords.longitude];
+        if (userMarker.current) userMarker.current.remove();
+        userMarker.current = L.marker(userLatLng.current, { icon: buildUserIcon(), zIndexOffset: 1000 })
+          .bindPopup('You are here')
+          .addTo(mapInstance.current);
+        if (!fittedOnce.current) {
+          mapInstance.current.setView(userLatLng.current, 14);
+        }
+      },
+      (err) => console.warn('[Geolyssa] map geolocation failed', err),
+      { timeout: 10000, maximumAge: 5 * 60 * 1000, enableHighAccuracy: true }
+    );
+    return () => { cancelled = true; };
+  }, []);
+
+  return (
+    <div style={{
+      width: '100%', height: '100%', background: THEME.bg,
+      color: THEME.ink, fontFamily: FONTS.body,
+      display: 'flex', flexDirection: 'column', overflow: 'hidden',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 10,
+        padding: `calc(16px + env(safe-area-inset-top)) 16px 10px`,
+        flexShrink: 0,
+      }}>
+        <button onClick={onBack} style={{
+          width: 40, height: 40, borderRadius: '50%',
+          background: THEME.surface, boxShadow: THEME.shadow,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}><IconBack size={18} stroke={THEME.ink} /></button>
+        <div style={{ flex: 1 }}>
+          <div style={{
+            fontFamily: FONTS.heading, fontSize: 32, fontWeight: 500,
+            letterSpacing: -0.3, lineHeight: 1,
+          }}>Discoveries map</div>
+          <div style={{ fontSize: 12, color: THEME.inkMuted, marginTop: 2 }}>
+            {withCoords.length} pinned {withCoords.length === 1 ? 'specimen' : 'specimens'}
+            {entries.length > withCoords.length && (
+              <span> · {entries.length - withCoords.length} without location</span>
+            )}
+          </div>
+        </div>
+      </div>
+      <div ref={mapRef} style={{ flex: 1, minHeight: 0, width: '100%' }} />
+      {withCoords.length === 0 && (
+        <div style={{
+          padding: '12px 16px calc(16px + env(safe-area-inset-bottom))',
+          background: THEME.surface, boxShadow: `0 -2px 10px rgba(0,0,0,0.05)`,
+          fontSize: 13, color: THEME.inkMuted, textAlign: 'center', flexShrink: 0,
+        }}>
+          {entries.length === 0
+            ? 'Save a specimen to pin it here.'
+            : `${entries.length} entries saved without location. Grant location and save a new find to start mapping.`}
+        </div>
+      )}
+    </div>
+  );
+}
+</script>
+
+<!-- ============================================================
+     APP SHELL — routing, normalisation, save pipeline
+     ============================================================ -->
+<script type="text/babel">
+const VALID_ROCK_TYPES = ['igneous', 'sedimentary', 'metamorphic', 'mineral', 'meteorite', 'fossil', 'other'];
+
+function normaliseMatch(m) {
+  const rawType = (m.rock_type || '').toLowerCase();
+  const rock_type = VALID_ROCK_TYPES.includes(rawType) ? rawType : 'other';
+  const safetyLevel = (m.safety?.level || 'unknown').toLowerCase();
+  const rock = {
+    id: m.id || (m.common_name || m.name || 'unknown').toLowerCase().replace(/\s+/g, '-'),
+    common: m.common_name || m.name || 'Unknown',
+    scientific: m.scientific_name || '—',
+    rock_type,
+    sub_type: m.sub_type || '',
+    classification: Array.isArray(m.classification) ? m.classification : [],
+    tagline: m.tagline || '',
+    description: m.description || m.tagline || '',
+    formation: m.formation || '—',
+    age_typical: m.age_typical || '—',
+    composition: Array.isArray(m.composition) ? m.composition : [],
+    texture: m.texture || '—',
+    hardness: m.hardness || '—',
+    diagnostic_tests: Array.isArray(m.diagnostic_tests) ? m.diagnostic_tests : [],
+    safety: {
+      level: ['safe', 'caution', 'hazardous'].includes(safetyLevel) ? safetyLevel : 'unknown',
+      note: m.safety?.note || 'No handling notes.',
+    },
+    uses: m.uses || '—',
+    tags: Array.isArray(m.tags) ? m.tags : [],
+    similarDetail: Array.isArray(m.similar) ? m.similar.map(s => ({
+      common: s.common_name || s.common || s.scientific_name || 'Unknown',
+      name: s.scientific_name || s.name || '',
+      differentiator: s.differentiator || s.why || '',
+    })) : [],
+  };
+  return {
+    rock,
+    conf: typeof m.confidence === 'number' ? m.confidence : 0.5,
+  };
+}
+
+function GeolyssaApp() {
+  const [screen, setScreen] = React.useState('home');
+  const [detailReturn, setDetailReturn] = React.useState('results');
+  const [photoUrl, setPhotoUrl] = React.useState(null);
+  const [matches, setMatches] = React.useState([]);
+  const [macrostrat, setMacrostrat] = React.useState(null);
+  const [activeRock, setActiveRock] = React.useState(null);
+  const [journalEntries, setJournalEntries] = React.useState([]);
+  const [journalLoaded, setJournalLoaded] = React.useState(false);
+  const [activeJournalId, setActiveJournalId] = React.useState(null);
+  const [tests, setTests] = React.useState({});
+  const [toast, setToastRaw] = React.useState(null);
+  const toastTimer = React.useRef(null);
+  const setToast = (msg) => {
+    setToastRaw(msg);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToastRaw(null), 3200);
+  };
+
+  const refreshJournal = React.useCallback(async () => {
+    try {
+      const list = await apiListEntries();
+      setJournalEntries(list);
+      setJournalLoaded(true);
+    } catch (e) {
+      console.error('[Geolyssa] journal load failed', e);
+      setJournalLoaded(true);
+      setToast(`Couldn't load journal: ${e.message}`);
+    }
+  }, []);
+
+  React.useEffect(() => { refreshJournal(); }, [refreshJournal]);
+
+  const recentCount = journalEntries.length;
+
+  const [scanPart, setScanPart] = React.useState(null);
+  const [rescanLoading, setRescanLoading] = React.useState(false);
+  const captureCoordsPromise = React.useRef(null);
+  const resolvedCoords = React.useRef(null);
+  // All photos submitted in the current scan pipeline (primary + any extras
+  // added from the results screen). A ref, not state — we only re-render
+  // when the resulting matches change.
+  const allPhotosRef = React.useRef([]);
+
+  const startScan = (dataUrl, part) => {
+    setPhotoUrl(dataUrl);
+    setMatches([]);
+    setMacrostrat(null);
+    setScanPart(part || null);
+    allPhotosRef.current = [{ dataUrl, part: part || 'whole' }];
+    captureCoordsPromise.current = getGeoFresh().catch(() => null);
+    setScreen('scan');
+  };
+
+  const onScanComplete = (data, coords) => {
+    const normalised = (data.matches || []).map(normaliseMatch);
+    setMatches(normalised);
+    setMacrostrat(data.macrostrat || null);
+    resolvedCoords.current = coords || null;
+    setScreen('results');
+  };
+
+  // Called from ResultsScreen when the user adds a fresh-break photo or
+  // fills in test results after a low-confidence verdict. Re-sends all
+  // photos + accumulated context to /api/identify and updates matches.
+  const rescanWithExtra = async ({ extraPhoto, newTests } = {}) => {
+    setRescanLoading(true);
+    try {
+      if (extraPhoto) {
+        allPhotosRef.current = [...allPhotosRef.current, extraPhoto];
+      }
+      const effectiveTests = newTests !== undefined ? newTests : tests;
+      if (newTests !== undefined) setTests(newTests);
+
+      let coords = resolvedCoords.current;
+      if (!coords && captureCoordsPromise.current) {
+        coords = await Promise.race([
+          captureCoordsPromise.current,
+          new Promise(r => setTimeout(() => r(null), 3000)),
+        ]);
+      }
+
+      const res = await fetch('/api/identify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          images: allPhotosRef.current.map(p => ({ image: p.dataUrl, part: p.part })),
+          coords: coords || undefined,
+          tests: effectiveTests && Object.keys(effectiveTests).length ? effectiveTests : undefined,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Re-scan failed (${res.status})`);
+      const normalised = (data.matches || []).map(normaliseMatch);
+      setMatches(normalised);
+      setMacrostrat(data.macrostrat || null);
+      resolvedCoords.current = coords || resolvedCoords.current;
+      setToast(extraPhoto ? 'Re-identified with new photo' : 'Re-identified with tests');
+    } catch (e) {
+      console.error('[Geolyssa] rescan failed', e);
+      setToast(`Re-scan failed: ${e.message}`);
+    } finally {
+      setRescanLoading(false);
+    }
+  };
+
+  const onScanError = (msg) => {
+    alert('Sorry — ' + msg);
+    setScreen('home');
+  };
+
+  const onSaveMatch = async (match) => {
+    const date = new Date().toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const tempId = 'tmp-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    const optimistic = {
+      id: tempId,
+      rock: match.rock,
+      rock_type: match.rock.rock_type || 'other',
+      photoUrl,
+      date,
+      location: 'Captured here',
+      coords: null,
+      note: match.rock.tagline || '',
+      _pending: true,
+    };
+    setJournalEntries(prev => [optimistic, ...prev]);
+    setToast('Saving…');
+
+    let coords = resolvedCoords.current;
+    if (!coords && captureCoordsPromise.current) {
+      try {
+        coords = await Promise.race([
+          captureCoordsPromise.current,
+          new Promise(r => setTimeout(() => r(null), 5000)),
+        ]);
+      } catch { coords = null; }
+    }
+
+    const alternatives = matches
+      .filter(m => m && m.rock && m.rock.id !== match.rock.id)
+      .map(m => ({ rock: m.rock, conf: m.conf }));
+
+    try {
+      await apiSaveEntry({
+        rock: match.rock,
+        photoUrl,
+        date,
+        location: 'Captured here',
+        coords,
+        note: match.rock.tagline || '',
+        alternatives,
+        macrostrat,
+      });
+      await refreshJournal();
+      setToast('Saved to journal');
+    } catch (e) {
+      console.error('[Geolyssa] save failed', e);
+      setJournalEntries(prev => prev.filter(x => x.id !== tempId));
+      setToast(`Couldn't save: ${e.message}`);
+    }
+  };
+
+  const openDetail = (matchOrEntry) => {
+    setActiveRock(matchOrEntry.rock);
+    if (matchOrEntry.photoUrl) setPhotoUrl(matchOrEntry.photoUrl);
+    const isJournalEntry = matchOrEntry.id && !String(matchOrEntry.id).startsWith('tmp-');
+    setActiveJournalId(isJournalEntry ? matchOrEntry.id : null);
+    setDetailReturn(screen);
+    setScreen('detail');
+  };
+
+  const handleDeleteJournalEntry = async (id) => {
+    await apiDeleteEntry(id);
+    await refreshJournal();
+    setActiveJournalId(null);
+    setScreen(detailReturn || 'journal');
+    setToast('Removed from journal');
+  };
+
+  const handleEntryUpdated = async (newRock) => {
+    if (newRock) setActiveRock(newRock);
+    await refreshJournal();
+  };
+
+  const activeEntry = React.useMemo(
+    () => activeJournalId ? journalEntries.find(e => e.id === activeJournalId) : null,
+    [activeJournalId, journalEntries]
+  );
+
+  const backFromDetail = () => setScreen(detailReturn || 'home');
+
+  return (
+    <div style={{ width: '100%', height: '100%' }}>
+      {screen === 'home' && (
+        <HomeScreen
+          onCapture={startScan}
+          onOpenJournal={() => setScreen('journal')}
+          onOpenMap={() => setScreen('map')}
+          onSelectEntry={openDetail}
+          recentCount={recentCount}
+          recentEntries={journalEntries.slice(0, 3)}
+          tests={tests}
+          setTests={setTests}
+        />
+      )}
+      {screen === 'scan' && (
+        <ScanScreen
+          photoUrl={photoUrl}
+          part={scanPart}
+          coords={captureCoordsPromise.current}
+          tests={tests}
+          onComplete={onScanComplete}
+          onError={onScanError}
+        />
+      )}
+      {screen === 'results' && (
+        <ResultsScreen
+          photoUrl={photoUrl}
+          matches={matches}
+          macrostrat={macrostrat}
+          tests={tests}
+          rescanLoading={rescanLoading}
+          extraCount={Math.max(0, allPhotosRef.current.length - 1)}
+          onBack={() => setScreen('home')}
+          onSelect={openDetail}
+          onSave={onSaveMatch}
+          onRescan={rescanWithExtra}
+        />
+      )}
+      {screen === 'detail' && (
+        <DetailScreen
+          rock={activeRock}
+          photoUrl={photoUrl}
+          onBack={backFromDetail}
+          journalId={activeJournalId}
+          entry={activeEntry}
+          onDelete={handleDeleteJournalEntry}
+          onEntryUpdated={handleEntryUpdated}
+          setToast={setToast}
+        />
+      )}
+      {screen === 'journal' && (
+        <JournalScreen
+          entries={journalEntries}
+          loaded={journalLoaded}
+          onBack={() => setScreen('home')}
+          onSelect={openDetail}
+          onDeleted={refreshJournal}
+          setToast={setToast}
+        />
+      )}
+      {screen === 'map' && (
+        <MapScreen
+          entries={journalEntries}
+          onBack={() => setScreen('home')}
+          onSelect={openDetail}
+        />
+      )}
+      {toast && (
+        <div style={{
+          position: 'fixed', left: '50%', bottom: 'calc(28px + env(safe-area-inset-bottom))',
+          transform: 'translateX(-50%)',
+          background: THEME.ink, color: '#fff',
+          padding: '10px 16px', borderRadius: 999,
+          fontSize: 13, fontWeight: 600,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+          maxWidth: '90%', textAlign: 'center',
+          zIndex: 200, pointerEvents: 'none',
+          animation: 'slideUp 180ms ease',
+        }}>{toast}</div>
+      )}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<GeolyssaApp />);
+</script>
+
+</body>
+</html>
