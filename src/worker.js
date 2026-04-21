@@ -593,6 +593,72 @@ async function servePhoto(request, env, key) {
   return new Response(obj.body, { headers });
 }
 
+// ── Mindat verify lookup ──────────────────────────────────────────
+// Mindat.org is the canonical mineral/rock database. Their REST API needs
+// a signup-gated key; we avoid that by scraping the publicly-served HTML
+// for the first search hit + its Open Graph meta tags (stable across the
+// occasional site redesign, unlike content selectors).
+//
+// Hit rate is bounded by user intent — only fires when the user taps
+// "Verify" on a results card — so we're polite to mindat.org.
+async function mindatLookup(name) {
+  if (!name || typeof name !== 'string') return null;
+  const searchUrl = `https://www.mindat.org/search.php?search=${encodeURIComponent(name)}`;
+  const ua = { 'User-Agent': 'Geolyssa/1.0 (+https://geolyssa.clydeford.net)', 'Accept': 'text/html' };
+  try {
+    const searchRes = await fetch(searchUrl, {
+      signal: AbortSignal.timeout(5000), headers: ua,
+    });
+    if (!searchRes.ok) return { search_url: searchUrl };
+    const html = await searchRes.text();
+    // First mineral (/min-N.html) or rock (/rock-N.html) hit on the page.
+    const link = html.match(/href="(\/(?:min|rock)-\d+\.html)"/);
+    if (!link) return { search_url: searchUrl };
+    const topUrl = `https://www.mindat.org${link[1]}`;
+
+    const detailRes = await fetch(topUrl, {
+      signal: AbortSignal.timeout(5000), headers: ua,
+    });
+    if (!detailRes.ok) return { search_url: searchUrl, top_url: topUrl };
+    const detailHtml = await detailRes.text();
+
+    const meta = (attr, val) => new RegExp(
+      `<meta[^>]+${attr}=["']${val}["'][^>]+content=["']([^"']+)["']`, 'i'
+    );
+    const metaRev = (attr, val) => new RegExp(
+      `<meta[^>]+content=["']([^"']+)["'][^>]+${attr}=["']${val}["']`, 'i'
+    );
+    const find = (attr, val) =>
+      (detailHtml.match(meta(attr, val)) || detailHtml.match(metaRev(attr, val)))?.[1] || null;
+
+    return {
+      search_url: searchUrl,
+      top_url: topUrl,
+      name: find('property', 'og:title') || name,
+      photo_url: find('property', 'og:image'),
+      description: find('name', 'description') || find('property', 'og:description'),
+    };
+  } catch (e) {
+    console.error('Mindat lookup failed', e);
+    return { search_url: searchUrl };
+  }
+}
+
+async function mindat(request) {
+  const url = new URL(request.url);
+  const name = url.searchParams.get('name');
+  if (!name) return json({ error: 'Expected name query param' }, 400);
+  const result = await mindatLookup(name);
+  return new Response(JSON.stringify(result || null), {
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      // Same mineral name from multiple users → same answer. Cache for an
+      // hour at the edge, browser doesn't re-request on back/forward nav.
+      'cache-control': 'public, max-age=3600',
+    },
+  });
+}
+
 // Standalone bedrock lookup — lets the home screen surface "what's beneath
 // you" without waiting for a scan. Cached briefly at the edge.
 async function bedrock(request) {
@@ -620,6 +686,7 @@ export default {
 
     if (path === '/api/identify') return identify(request, env);
     if (path === '/api/bedrock') return bedrock(request);
+    if (path === '/api/mindat') return mindat(request);
     if (path === '/api/health') return json({ ok: true, ts: Date.now() });
 
     if (path === '/api/journal') {

@@ -1557,40 +1557,36 @@ function ScanScreen({ photoUrl, part, coords, tests, onComplete, onError }) {
      SCREEN — RESULTS
      ============================================================ -->
 <script type="text/babel">
-function useWikipediaSummary(scientificName, commonName, enabled) {
+function useMindatLookup(name, enabled) {
   const [state, setState] = React.useState({ loading: false, data: null, error: null });
   React.useEffect(() => {
-    if (!enabled) { setState({ loading: false, data: null, error: null }); return; }
+    if (!enabled || !name) { setState({ loading: false, data: null, error: null }); return; }
     let cancelled = false;
-    const fetchSummary = async (title) => {
-      const res = await fetch(`https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`, { headers: { Accept: 'application/json' } });
-      if (!res.ok) return null;
-      const d = await res.json();
-      if (d.type === 'disambiguation' || !d.extract) return null;
-      return d;
-    };
     (async () => {
       setState({ loading: true, data: null, error: null });
       try {
-        let data = commonName ? await fetchSummary(commonName + ' (rock)') : null;
-        if (!data && commonName) data = await fetchSummary(commonName);
-        if (!data && scientificName) data = await fetchSummary(scientificName);
+        const res = await fetch(`/api/mindat?name=${encodeURIComponent(name)}`);
+        if (!res.ok) throw new Error(`Mindat lookup failed (${res.status})`);
+        const data = await res.json();
         if (cancelled) return;
-        if (!data) setState({ loading: false, data: null, error: 'No Wikipedia article found.' });
-        else setState({ loading: false, data, error: null });
+        setState({ loading: false, data, error: null });
       } catch (e) {
         if (!cancelled) setState({ loading: false, data: null, error: e.message || 'Fetch failed' });
       }
     })();
     return () => { cancelled = true; };
-  }, [scientificName, commonName, enabled]);
+  }, [name, enabled]);
   return state;
 }
 
-function WikipediaVerifySheet({ open, onClose, rock, photoUrl }) {
-  const { loading, data, error } = useWikipediaSummary(rock?.scientific, rock?.common, open);
+function VerifySheet({ open, onClose, rock, photoUrl }) {
+  const name = rock?.common;
+  const { loading, data, error } = useMindatLookup(name, open);
   if (!open) return null;
-  const wikiImg = data?.originalimage?.source || data?.thumbnail?.source || null;
+  const mindatImg = data?.photo_url || null;
+  const mindatUrl = data?.top_url || data?.search_url || null;
+  const wikiUrl = name ? `https://en.wikipedia.org/wiki/Special:Search?search=${encodeURIComponent(name)}` : null;
+
   return (
     <div onClick={onClose} style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
@@ -1610,7 +1606,7 @@ function WikipediaVerifySheet({ open, onClose, rock, photoUrl }) {
           }}>×</button>
         </div>
         <div style={{ fontSize: 13, color: THEME.inkMuted }}>
-          Compare your photo with Wikipedia&apos;s reference for <b>{rock?.common}</b>. If they look different, try another match.
+          Compare your photo with Mindat&apos;s reference for <b>{name}</b>. If they look different, try another match.
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
           <div>
@@ -1622,34 +1618,46 @@ function WikipediaVerifySheet({ open, onClose, rock, photoUrl }) {
             }} />
           </div>
           <div>
-            <div style={{ fontSize: 10, color: THEME.inkMuted, fontWeight: 700, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.8 }}>Wikipedia</div>
+            <div style={{ fontSize: 10, color: THEME.inkMuted, fontWeight: 700, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.8 }}>Mindat</div>
             <div style={{
               width: '100%', aspectRatio: '1 / 1', borderRadius: THEME.radiusSm,
-              background: wikiImg ? `#000 center/cover url(${wikiImg})` : THEME.surface,
+              background: mindatImg ? `#000 center/cover url(${mindatImg})` : THEME.surface,
               boxShadow: THEME.shadow,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
               color: THEME.inkMuted, fontSize: 11, padding: 10, textAlign: 'center',
             }}>
               {loading && 'Loading…'}
-              {!loading && !wikiImg && (error || 'No reference photo')}
+              {!loading && !mindatImg && (error || 'No reference photo')}
             </div>
           </div>
         </div>
-        {data && (
+        {data && (data.description || data.name) && (
           <div style={{
             background: THEME.surface, borderRadius: THEME.radiusSm,
             padding: 14, boxShadow: THEME.shadow,
           }}>
-            <div style={{ fontFamily: FONTS.heading, fontSize: 17, fontWeight: 500 }}>{data.title}</div>
-            {data.description && <div style={{ fontSize: 12, color: THEME.inkMuted, marginTop: 2 }}>{data.description}</div>}
-            <div style={{ fontSize: 14, lineHeight: 1.45, marginTop: 8 }}>{data.extract}</div>
-            {data.content_urls?.desktop?.page && (
-              <a href={data.content_urls.desktop.page} target="_blank" rel="noopener noreferrer" style={{
-                display: 'inline-block', marginTop: 10,
-                color: THEME.accentDeep, fontSize: 13, fontWeight: 600, textDecoration: 'none',
-              }}>Read on Wikipedia ↗</a>
+            {data.name && (
+              <div style={{ fontFamily: FONTS.heading, fontSize: 17, fontWeight: 500 }}>{data.name}</div>
+            )}
+            {data.description && (
+              <div style={{ fontSize: 14, lineHeight: 1.45, marginTop: 8 }}>{data.description}</div>
             )}
           </div>
+        )}
+        {mindatUrl && (
+          <a href={mindatUrl} target="_blank" rel="noopener noreferrer" style={{
+            display: 'block', textAlign: 'center',
+            padding: '12px 14px', borderRadius: THEME.radiusSm,
+            background: THEME.accent, color: '#fff',
+            fontWeight: 700, fontSize: 13, textDecoration: 'none',
+          }}>View on Mindat ↗</a>
+        )}
+        {wikiUrl && (
+          <a href={wikiUrl} target="_blank" rel="noopener noreferrer" style={{
+            display: 'block', textAlign: 'center',
+            padding: '8px', fontSize: 12, fontWeight: 600,
+            color: THEME.inkMuted, textDecoration: 'none',
+          }}>Also on Wikipedia ↗</a>
         )}
       </div>
     </div>
@@ -1894,7 +1902,7 @@ function ResultsScreen({ photoUrl, matches, macrostrat, tests, rescanLoading, ex
             background: THEME.accentSoft, color: THEME.accentDeep,
             fontWeight: 700, fontSize: 13,
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-          }}>Verify on Wikipedia ↗</button>
+          }}>Verify on Mindat ↗</button>
         </div>
 
         <div style={{ padding: '0 20px 14px' }}>
@@ -1942,7 +1950,7 @@ function ResultsScreen({ photoUrl, matches, macrostrat, tests, rescanLoading, ex
         }}>Full profile →</button>
       </div>
 
-      <WikipediaVerifySheet
+      <VerifySheet
         open={verifyOpen}
         onClose={() => setVerifyOpen(false)}
         rock={rock}
