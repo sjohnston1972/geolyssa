@@ -601,46 +601,73 @@ async function servePhoto(request, env, key) {
 //
 // Hit rate is bounded by user intent — only fires when the user taps
 // "Verify" on a results card — so we're polite to mindat.org.
+// Descriptive modifiers Claude likes to attach to identifications (e.g.
+// "Quartzite Pebble", "Weathered Basalt") that Mindat doesn't index. Strip
+// these before retrying.
+const MINDAT_STRIP_WORDS = /\b(pebble|cobble|boulder|fragment|piece|chunk|specimen|sample|weathered|fresh|water-worn|rounded|tumbled)\b/gi;
+
+function mindatSearchVariants(name) {
+  const variants = [name];
+  const stripped = name.replace(MINDAT_STRIP_WORDS, '').trim().replace(/\s+/g, ' ');
+  if (stripped && stripped !== name) variants.push(stripped);
+  // As a last resort, the first word — usually the rock type itself.
+  const firstWord = stripped.split(/\s+/)[0];
+  if (firstWord && !variants.includes(firstWord)) variants.push(firstWord);
+  return variants;
+}
+
+async function mindatSearchOne(query) {
+  const searchUrl = `https://www.mindat.org/search.php?search=${encodeURIComponent(query)}`;
+  const ua = { 'User-Agent': 'Geolyssa/1.0 (+https://geolyssa.clydeford.net)', 'Accept': 'text/html' };
+  const searchRes = await fetch(searchUrl, {
+    signal: AbortSignal.timeout(5000), headers: ua,
+  });
+  if (!searchRes.ok) return { search_url: searchUrl };
+  const html = await searchRes.text();
+  const link = html.match(/href="(\/(?:min|rock)-\d+\.html)"/);
+  if (!link) return { search_url: searchUrl };
+  const topUrl = `https://www.mindat.org${link[1]}`;
+
+  const detailRes = await fetch(topUrl, {
+    signal: AbortSignal.timeout(5000), headers: ua,
+  });
+  if (!detailRes.ok) return { search_url: searchUrl, top_url: topUrl };
+  const detailHtml = await detailRes.text();
+
+  const meta = (attr, val) => new RegExp(
+    `<meta[^>]+${attr}=["']${val}["'][^>]+content=["']([^"']+)["']`, 'i'
+  );
+  const metaRev = (attr, val) => new RegExp(
+    `<meta[^>]+content=["']([^"']+)["'][^>]+${attr}=["']${val}["']`, 'i'
+  );
+  const find = (attr, val) =>
+    (detailHtml.match(meta(attr, val)) || detailHtml.match(metaRev(attr, val)))?.[1] || null;
+
+  return {
+    search_url: searchUrl,
+    top_url: topUrl,
+    name: find('property', 'og:title') || query,
+    photo_url: find('property', 'og:image'),
+    description: find('name', 'description') || find('property', 'og:description'),
+  };
+}
+
 async function mindatLookup(name) {
   if (!name || typeof name !== 'string') return null;
-  const searchUrl = `https://www.mindat.org/search.php?search=${encodeURIComponent(name)}`;
-  const ua = { 'User-Agent': 'Geolyssa/1.0 (+https://geolyssa.clydeford.net)', 'Accept': 'text/html' };
+  const originalSearchUrl = `https://www.mindat.org/search.php?search=${encodeURIComponent(name)}`;
+  // Try each variant in order; first one that finds a detail page wins.
+  // Misses typically require 2 variants × 1 HTTP call each = fast.
   try {
-    const searchRes = await fetch(searchUrl, {
-      signal: AbortSignal.timeout(5000), headers: ua,
-    });
-    if (!searchRes.ok) return { search_url: searchUrl };
-    const html = await searchRes.text();
-    // First mineral (/min-N.html) or rock (/rock-N.html) hit on the page.
-    const link = html.match(/href="(\/(?:min|rock)-\d+\.html)"/);
-    if (!link) return { search_url: searchUrl };
-    const topUrl = `https://www.mindat.org${link[1]}`;
-
-    const detailRes = await fetch(topUrl, {
-      signal: AbortSignal.timeout(5000), headers: ua,
-    });
-    if (!detailRes.ok) return { search_url: searchUrl, top_url: topUrl };
-    const detailHtml = await detailRes.text();
-
-    const meta = (attr, val) => new RegExp(
-      `<meta[^>]+${attr}=["']${val}["'][^>]+content=["']([^"']+)["']`, 'i'
-    );
-    const metaRev = (attr, val) => new RegExp(
-      `<meta[^>]+content=["']([^"']+)["'][^>]+${attr}=["']${val}["']`, 'i'
-    );
-    const find = (attr, val) =>
-      (detailHtml.match(meta(attr, val)) || detailHtml.match(metaRev(attr, val)))?.[1] || null;
-
-    return {
-      search_url: searchUrl,
-      top_url: topUrl,
-      name: find('property', 'og:title') || name,
-      photo_url: find('property', 'og:image'),
-      description: find('name', 'description') || find('property', 'og:description'),
-    };
+    for (const variant of mindatSearchVariants(name)) {
+      const result = await mindatSearchOne(variant);
+      if (result?.top_url) return result;
+    }
+    // All variants returned only a search URL — give back the original one
+    // so the fallback link matches what the user typed.
+    return { search_url: originalSearchUrl };
   } catch (e) {
     console.error('Mindat lookup failed', e);
-    return { search_url: searchUrl };
+    return { search_url: originalSearchUrl };
   }
 }
 
