@@ -469,6 +469,19 @@ function saveCameraId(id) {
   try { id ? localStorage.setItem(CAM_PREF_KEY, id) : localStorage.removeItem(CAM_PREF_KEY); } catch {}
 }
 
+// Some browsers (parts of Huawei's stack, a handful of older Android WebViews)
+// have a broken getUserMedia that hangs indefinitely. Once we've seen it fail
+// on this device, skip the live-camera attempt on load and go straight to the
+// file-picker fallback — which uses the phone's native camera app and works
+// everywhere. The user can still try live camera again via the retry link.
+const CAM_FALLBACK_KEY = 'geolyssa:camera_fallback:v1';
+function cameraInFallbackMode() {
+  try { return localStorage.getItem(CAM_FALLBACK_KEY) === '1'; } catch { return false; }
+}
+function setCameraFallback(on) {
+  try { on ? localStorage.setItem(CAM_FALLBACK_KEY, '1') : localStorage.removeItem(CAM_FALLBACK_KEY); } catch {}
+}
+
 const DEVICE_ID_KEY = 'geolyssa:device_id:v1';
 function getDeviceId() {
   let id = null;
@@ -939,7 +952,10 @@ function HomeScreen({ onCapture, onOpenJournal, onOpenMap, onSelectEntry, recent
   const initCamera = React.useCallback(async () => {
     setCameraErr(null);
     try {
-      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API not available on this browser');
+      if (!navigator.mediaDevices?.getUserMedia) {
+        setCameraFallback(true);
+        throw new Error('Live camera not supported — tap the capture button to open your phone camera.');
+      }
 
       // Pre-flight: if the Permissions API knows the state, give a better
       // error up-front than a 10s timeout. Chrome/Edge/Firefox support it;
@@ -994,14 +1010,23 @@ function HomeScreen({ onCapture, onOpenJournal, onOpenMap, onSelectEntry, recent
         const idx = videoIns.findIndex(d => d.deviceId === currentId);
         if (idx >= 0) setActiveCameraIdx(idx);
       }
+      // Live camera worked — clear any past fallback flag.
+      setCameraFallback(false);
     } catch (e) {
+      setCameraFallback(true);
       setCameraErr(e.message || 'Camera unavailable');
     }
   }, [startStream]);
 
   React.useEffect(() => {
     let cancelled = false;
-    initCamera().then(() => { if (cancelled) {/* no-op */} });
+    if (cameraInFallbackMode()) {
+      // Skip the live-camera dance entirely on browsers we've seen fail before.
+      // Sets cameraErr so the UI renders the tap-to-shoot affordance.
+      setCameraErr('Using phone camera — tap the capture button to take a photo.');
+    } else {
+      initCamera().then(() => { if (cancelled) {/* no-op */} });
+    }
     return () => {
       cancelled = true;
       if (streamRef.current) {
@@ -1155,33 +1180,43 @@ function HomeScreen({ onCapture, onOpenJournal, onOpenMap, onSelectEntry, recent
             fontSize: 12, fontWeight: 500, letterSpacing: 0.2,
           }}>
             {cameraErr
-              ? `⚠ ${cameraErr}`
+              ? cameraErr
               : cameraReady
                 ? '🪨 Frame the specimen · tap to capture'
                 : '🪨 Starting camera…'}
           </div>
           {cameraErr && (
-            <div style={{ display: 'flex', gap: 8 }}>
-              <button
-                onClick={() => initCamera()}
-                style={{
-                  background: 'rgba(255,255,255,0.9)', color: THEME.ink,
-                  padding: '8px 14px', borderRadius: 999,
-                  fontSize: 13, fontWeight: 700,
-                }}
-              >↻ Retry camera</button>
-              <button
-                onClick={() => fileRef.current?.click()}
-                style={{
-                  background: 'rgba(0,0,0,0.5)', color: '#fff',
-                  padding: '8px 14px', borderRadius: 999,
-                  fontSize: 13, fontWeight: 700,
-                  backdropFilter: 'blur(10px)',
-                }}
-              >📷 Pick a photo</button>
-            </div>
+            <button
+              onClick={() => {
+                setCameraFallback(false);
+                setCameraErr(null);
+                initCamera();
+              }}
+              style={{
+                background: 'rgba(255,255,255,0.15)', color: '#fff',
+                padding: '6px 12px', borderRadius: 999,
+                fontSize: 11, fontWeight: 600,
+                backdropFilter: 'blur(10px)',
+                border: '1px solid rgba(255,255,255,0.25)',
+              }}
+            >↻ Try live camera again</button>
           )}
         </div>
+
+        {/* When live stream isn't available, the whole viewfinder becomes a
+            single tap target that opens the native camera app. The main
+            capture button still works the same way, this is a secondary hit
+            zone so users can't miss it. */}
+        {cameraErr && (
+          <button
+            onClick={() => fileRef.current?.click()}
+            aria-label="Take a photo"
+            style={{
+              position: 'absolute', inset: 0, background: 'transparent',
+              cursor: 'pointer', zIndex: 3,
+            }}
+          />
+        )}
       </div>
 
       {/* Lower panel — whole pane is draggable (see onPaneTouchMove) */}
