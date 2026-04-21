@@ -676,6 +676,11 @@ async function mindat(request) {
   const name = url.searchParams.get('name');
   if (!name) return json({ error: 'Expected name query param' }, 400);
   const result = await mindatLookup(name);
+  if (result?.photo_url) {
+    // Rewrite the photo URL to route through our same-origin proxy so the
+    // browser doesn't send a Referer that Mindat's CDN would reject.
+    result.photo_url = `/api/mindat-photo?url=${encodeURIComponent(result.photo_url)}`;
+  }
   return new Response(JSON.stringify(result || null), {
     headers: {
       'content-type': 'application/json; charset=utf-8',
@@ -685,6 +690,35 @@ async function mindat(request) {
       'cache-control': 'no-store',
     },
   });
+}
+
+// Image proxy for Mindat's CDN, which blocks hotlinking based on the Referer
+// header. Fetching from the Worker strips Referer, so the image comes
+// through. Restricted to mindat.org/imagecache to prevent the endpoint
+// being used as an open proxy.
+async function mindatPhoto(request) {
+  const url = new URL(request.url);
+  const target = url.searchParams.get('url');
+  if (!target) return new Response('missing url', { status: 400 });
+  let parsed;
+  try { parsed = new URL(target); } catch { return new Response('bad url', { status: 400 }); }
+  if (parsed.hostname !== 'www.mindat.org' && parsed.hostname !== 'mindat.org') {
+    return new Response('only mindat.org allowed', { status: 400 });
+  }
+  if (!parsed.pathname.startsWith('/imagecache/') && !parsed.pathname.startsWith('/photos/')) {
+    return new Response('only imagecache/photos paths', { status: 400 });
+  }
+  const upstream = await fetch(parsed.toString(), {
+    signal: AbortSignal.timeout(8000),
+    headers: { 'User-Agent': 'Geolyssa/1.0 (+https://geolyssa.clydeford.net)' },
+  });
+  if (!upstream.ok) return new Response('upstream error', { status: upstream.status });
+  const headers = new Headers();
+  const ct = upstream.headers.get('content-type');
+  if (ct) headers.set('content-type', ct);
+  // Per-image URL is stable; cache aggressively at the edge + browser.
+  headers.set('cache-control', 'public, max-age=86400, immutable');
+  return new Response(upstream.body, { headers, status: 200 });
 }
 
 // Standalone bedrock lookup — lets the home screen surface "what's beneath
@@ -715,6 +749,7 @@ export default {
     if (path === '/api/identify') return identify(request, env);
     if (path === '/api/bedrock') return bedrock(request);
     if (path === '/api/mindat') return mindat(request);
+    if (path === '/api/mindat-photo') return mindatPhoto(request);
     if (path === '/api/health') return json({ ok: true, ts: Date.now() });
 
     if (path === '/api/journal') {
