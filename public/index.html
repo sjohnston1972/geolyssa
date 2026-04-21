@@ -1208,6 +1208,8 @@ function HomeScreen({ onCapture, onOpenJournal, onOpenMap, onSelectEntry, recent
 
           <BedrockCard bedrock={bedrock} loaded={bedrockLoaded} error={bedrockErr} />
 
+          <FeedbackFooter />
+
           {sheetOpen && (
             <div style={{ marginTop: 4 }}>
               <div style={{
@@ -1327,6 +1329,45 @@ function BedrockCard({ bedrock, loaded, error }) {
           >Learn more ↗</a>
         )}
       </div>
+    </div>
+  );
+}
+
+// Small "report / request" footer. mailto links open the user's default
+// mail app with a prefilled subject + body. Zero backend — the email lands
+// in the maintainer's inbox directly.
+function FeedbackFooter() {
+  const FEEDBACK_EMAIL = 'stevie.johnston@gmail.com';
+  const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
+  const deviceId = (typeof localStorage !== 'undefined' && localStorage.getItem('geolyssa:device_id:v1')) || '—';
+  const ctxLines = [
+    '',
+    '',
+    '—',
+    `Device ID: ${deviceId}`,
+    `User agent: ${ua}`,
+    `URL: ${typeof location !== 'undefined' ? location.href : ''}`,
+  ].join('\n');
+
+  const bug = `mailto:${FEEDBACK_EMAIL}`
+    + `?subject=${encodeURIComponent('Geolyssa — bug report')}`
+    + `&body=${encodeURIComponent('What went wrong:\n\nSteps to reproduce:' + ctxLines)}`;
+  const feature = `mailto:${FEEDBACK_EMAIL}`
+    + `?subject=${encodeURIComponent('Geolyssa — feature request')}`
+    + `&body=${encodeURIComponent('What would make the app better:' + ctxLines)}`;
+
+  const linkStyle = {
+    flex: 1, textAlign: 'center',
+    padding: '10px 12px', borderRadius: THEME.radiusTight,
+    background: THEME.surface, boxShadow: THEME.shadow,
+    fontSize: 12, fontWeight: 600, color: THEME.ink,
+    textDecoration: 'none',
+  };
+
+  return (
+    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+      <a href={bug} style={linkStyle}>🐞 Report issue</a>
+      <a href={feature} style={linkStyle}>💡 Request feature</a>
     </div>
   );
 }

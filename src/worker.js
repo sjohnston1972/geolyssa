@@ -223,7 +223,7 @@ function formatMacrostratContext(ctx) {
   const sourceLabel = ctx.source === 'bgs'
     ? "British Geological Survey 50k bedrock map"
     : "Macrostrat geologic unit map";
-  return `Local bedrock context (from ${sourceLabel} at the user's coordinates):\n${bits.join('\n')}\n\nNote: this is the mapped bedrock, but the user may be holding an erratic, cobble, or imported stone. Use this as a prior, not a constraint.`;
+  return `Bedrock mapped at the user's current coordinates (from ${sourceLabel}):\n${bits.join('\n')}\n\nIMPORTANT — this describes the rock beneath the user's feet, NOT necessarily the specimen in the photo. The photographed rock could be:\n  • picked up locally (bedrock context is useful)\n  • a glacial erratic, cobble or detritus transported from elsewhere\n  • a desktop/collection/shop/museum specimen from anywhere on Earth\nTreat the bedrock context as a weak prior that only slightly raises the likelihood of consistent rocks. If the visual evidence clearly conflicts with local bedrock, trust the photo and call out the mismatch in the tagline (e.g., "this isn't consistent with the local Cretaceous chalk — likely a collected specimen").`;
 }
 
 function formatPhysicalTests(tests) {
