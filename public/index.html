@@ -901,32 +901,55 @@ function HomeScreen({ onCapture, onOpenJournal, onOpenMap, onSelectEntry, recent
     setCameraReady(true);
   }, []);
 
+  const initCamera = React.useCallback(async () => {
+    setCameraErr(null);
+    try {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API not available');
+      // First start — establishes permission. Until the user grants camera
+      // access, enumerateDevices returns entries with empty deviceId strings.
+      await startStream(null);
+
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const videoIns = devices.filter(d => d.kind === 'videoinput');
+      setCameras(videoIns);
+
+      // Preference order:
+      //   1. deviceId saved from a previous cycle (works across loads on same phone)
+      //   2. index 4 — camera 5 on Huawei P30 Pro (back-wide with best optics)
+      //   3. whatever facingMode: environment already picked
+      const savedId = getSavedCameraId();
+      let targetIdx = -1;
+      if (savedId) targetIdx = videoIns.findIndex(d => d.deviceId === savedId);
+      if (targetIdx < 0 && videoIns[4]) targetIdx = 4;
+
+      // If the preferred device is already what's streaming, don't restart —
+      // the double start races on some devices and sometimes kills both
+      // streams.
+      const currentId = streamRef.current?.getVideoTracks()[0]?.getSettings?.().deviceId;
+      if (targetIdx >= 0 && videoIns[targetIdx].deviceId && videoIns[targetIdx].deviceId !== currentId) {
+        setActiveCameraIdx(targetIdx);
+        try {
+          await startStream(videoIns[targetIdx].deviceId);
+        } catch (switchErr) {
+          // Preferred camera failed (perhaps the ID is stale from a
+          // previous session). Clear the save so next load doesn't repeat
+          // the mistake, and fall back to facingMode:environment.
+          console.warn('Preferred camera failed, falling back', switchErr);
+          saveCameraId(null);
+          try { await startStream(null); } catch {}
+        }
+      } else {
+        const idx = videoIns.findIndex(d => d.deviceId === currentId);
+        if (idx >= 0) setActiveCameraIdx(idx);
+      }
+    } catch (e) {
+      setCameraErr(e.message || 'Camera unavailable');
+    }
+  }, [startStream]);
+
   React.useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        if (!navigator.mediaDevices?.getUserMedia) throw new Error('Camera API not available');
-        await startStream(null);
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        if (cancelled) return;
-        const videoIns = devices.filter(d => d.kind === 'videoinput');
-        setCameras(videoIns);
-        // Preference order:
-        //   1. deviceId saved from a previous cycle (works across loads on same phone)
-        //   2. index 4 — camera 5 on Huawei P30 Pro (back-wide with best optics)
-        //   3. whatever facingMode: environment already picked
-        const savedId = getSavedCameraId();
-        let targetIdx = -1;
-        if (savedId) targetIdx = videoIns.findIndex(d => d.deviceId === savedId);
-        if (targetIdx < 0 && videoIns[4]) targetIdx = 4;
-        if (targetIdx >= 0) {
-          setActiveCameraIdx(targetIdx);
-          try { await startStream(videoIns[targetIdx].deviceId); } catch {}
-        }
-      } catch (e) {
-        if (!cancelled) setCameraErr(e.message || 'Camera unavailable');
-      }
-    })();
+    initCamera().then(() => { if (cancelled) {/* no-op */} });
     return () => {
       cancelled = true;
       if (streamRef.current) {
@@ -934,7 +957,7 @@ function HomeScreen({ onCapture, onOpenJournal, onOpenMap, onSelectEntry, recent
         streamRef.current = null;
       }
     };
-  }, [startStream]);
+  }, [initCamera]);
 
   const cycleCamera = async () => {
     if (cameras.length < 2) return;
@@ -1069,7 +1092,9 @@ function HomeScreen({ onCapture, onOpenJournal, onOpenMap, onSelectEntry, recent
 
         <div style={{
           position: 'absolute', top: `calc(70px + env(safe-area-inset-top))`, left: 0, right: 0,
-          textAlign: 'center', pointerEvents: 'none', zIndex: 5,
+          textAlign: 'center', zIndex: 5,
+          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10,
+          pointerEvents: cameraErr ? 'auto' : 'none',
         }}>
           <div style={{
             display: 'inline-block',
@@ -1078,11 +1103,32 @@ function HomeScreen({ onCapture, onOpenJournal, onOpenMap, onSelectEntry, recent
             fontSize: 12, fontWeight: 500, letterSpacing: 0.2,
           }}>
             {cameraErr
-              ? '🪨 Tap to pick a photo'
+              ? `⚠ ${cameraErr}`
               : cameraReady
                 ? '🪨 Frame the specimen · tap to capture'
                 : '🪨 Starting camera…'}
           </div>
+          {cameraErr && (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => initCamera()}
+                style={{
+                  background: 'rgba(255,255,255,0.9)', color: THEME.ink,
+                  padding: '8px 14px', borderRadius: 999,
+                  fontSize: 13, fontWeight: 700,
+                }}
+              >↻ Retry camera</button>
+              <button
+                onClick={() => fileRef.current?.click()}
+                style={{
+                  background: 'rgba(0,0,0,0.5)', color: '#fff',
+                  padding: '8px 14px', borderRadius: 999,
+                  fontSize: 13, fontWeight: 700,
+                  backdropFilter: 'blur(10px)',
+                }}
+              >📷 Pick a photo</button>
+            </div>
+          )}
         </div>
       </div>
 
