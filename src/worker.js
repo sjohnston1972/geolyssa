@@ -418,6 +418,15 @@ async function identify(request, env) {
     }
   }
 
+  // Meteorite confidence cap applies unconditionally — even when physical
+  // tests were supplied — because most "meteorite" photos are terrestrial
+  // slag, magnetite, or iron concretions (README.md promises this cap).
+  for (const m of parsed.matches) {
+    if (m?.rock_type === 'meteorite' && typeof m?.confidence === 'number') {
+      m.confidence = Math.min(m.confidence, 0.6);
+    }
+  }
+
   // Pass Macrostrat context back so the UI can display it as a first-class
   // "bedrock here" card, separate from the AI's interpretation.
   parsed.macrostrat = macrostratCtx || null;
