@@ -359,7 +359,11 @@ async function identify(request, env) {
     },
     body: JSON.stringify({
       model: 'claude-sonnet-4-6',
-      max_tokens: 4096,
+      // Up to 3 matches, each a large object (diagnostic_tests, similar[],
+      // composition[], etc.) can comfortably exceed 4096 output tokens and
+      // get truncated mid-JSON. 8192 gives ~2x headroom over the observed
+      // worst case for a full 3-match response.
+      max_tokens: 8192,
       system: IDENTIFY_SYSTEM_PROMPT,
       messages: [{ role: 'user', content }],
     }),
