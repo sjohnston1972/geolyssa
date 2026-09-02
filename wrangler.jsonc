@@ -17,5 +17,16 @@
       "pattern": "geolyssa.clydeford.net",
       "custom_domain": true
     }
+  ],
+  // D1 binding matching env.DB (src/worker.js). `wrangler dev` uses a local
+  // simulated D1 automatically — the placeholder database_id below is fine
+  // for local-only use. For `wrangler` commands that hit the *remote* DB,
+  // replace it with the real UUID from `wrangler d1 info geolyssa`.
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "geolyssa",
+      "database_id": "local"
+    }
   ]
 }
