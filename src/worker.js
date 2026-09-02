@@ -298,6 +298,12 @@ async function identify(request, env) {
       }
       const m = image.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
       if (!m) return json({ error: 'Malformed image data URL in images[]' }, 400);
+      // Reject oversized images before decoding or forwarding to Claude —
+      // a cheap length check on the base64 string itself, no atob() needed.
+      const approxBytes = estimateBase64Bytes(m[2]);
+      if (approxBytes > MAX_PHOTO_BYTES) {
+        return json({ error: `Image too large (~${approxBytes} bytes, max ${MAX_PHOTO_BYTES}) in images[]` }, 413);
+      }
       photos.push({
         mediaType: m[1], base64: m[2],
         part: ALLOWED_PARTS.includes(item?.part) ? item.part : null,
@@ -310,6 +316,10 @@ async function identify(request, env) {
     }
     const m = image.match(/^data:(image\/[a-zA-Z+]+);base64,(.+)$/);
     if (!m) return json({ error: 'Malformed image data URL' }, 400);
+    const approxBytes = estimateBase64Bytes(m[2]);
+    if (approxBytes > MAX_PHOTO_BYTES) {
+      return json({ error: `Image too large (~${approxBytes} bytes, max ${MAX_PHOTO_BYTES})` }, 413);
+    }
     photos.push({
       mediaType: m[1], base64: m[2],
       part: ALLOWED_PARTS.includes(body?.part) ? body.part : null,
@@ -462,6 +472,15 @@ const MAX_PHOTO_BYTES = 600 * 1024;
 
 function validateDeviceId(id) {
   return typeof id === 'string' && DEVICE_ID_RE.test(id);
+}
+
+// Cheap decoded-size estimate from a base64 string's length, without
+// actually decoding it — used to reject oversized images (identify path)
+// before spending the CPU/memory to decode them or the cost to forward them
+// to Claude. Slightly over-counts vs. the true byte length (ignores '='
+// padding), which only makes the check more conservative, never less safe.
+function estimateBase64Bytes(base64) {
+  return Math.floor((base64.length * 3) / 4);
 }
 
 function decodeDataUrl(dataUrl) {
