@@ -1,0 +1,5 @@
+# Copy to .dev.vars (git-ignored) for `wrangler dev`. Wrangler loads this
+# file automatically and injects the values as env vars for local dev only —
+# it is never used in production (scripts/deploy.sh sets the real Worker
+# secret separately).
+ANTHROPIC_API_KEY=sk-ant-...

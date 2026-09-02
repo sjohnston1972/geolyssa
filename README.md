@@ -144,7 +144,12 @@ Liveness ping.
 
 ## Local iteration
 
-Edit `public/index.html`, run `bash scripts/deploy.sh`, refresh on your phone. For hot reload: `npm i -g wrangler` and `wrangler dev` — `wrangler.jsonc` is wired.
+Edit `public/index.html`, run `bash scripts/deploy.sh`, refresh on your phone. For hot reload:
+
+1. `npm i -g wrangler`
+2. Apply the D1 schema to the local simulated database: `wrangler d1 execute geolyssa --local --file=schema.sql`
+3. Copy `.dev.vars.example` to `.dev.vars` and fill in a real `ANTHROPIC_API_KEY` (git-ignored, never committed)
+4. `wrangler dev` — `wrangler.jsonc` declares the `DB` (D1) and `PHOTOS` (R2) bindings `wrangler dev` needs, plus `.dev.vars` supplies `ANTHROPIC_API_KEY`; the journal, photos and identify routes all work locally against local-only simulated storage.
 
 Mobile debugging: append `?debug=1` to the URL to load the [eruda](https://github.com/liriliri/eruda) on-device console. Preference persists via sessionStorage until you visit `?debug=off`.
 
