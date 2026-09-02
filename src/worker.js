@@ -407,6 +407,17 @@ async function identify(request, env) {
   }
   if (!parsed || !Array.isArray(parsed.matches)) parsed = { matches: [] };
 
+  // Server-side confidence cap: the model is only *asked* to cap confidence
+  // at 0.7 without physical tests (README.md promises this as a guarantee,
+  // not a suggestion) — LLMs don't reliably obey numeric constraints, so
+  // enforce it here regardless of what the model returned.
+  const hasTests = testsBlock !== '';
+  if (!hasTests) {
+    for (const m of parsed.matches) {
+      if (typeof m?.confidence === 'number') m.confidence = Math.min(m.confidence, 0.7);
+    }
+  }
+
   // Pass Macrostrat context back so the UI can display it as a first-class
   // "bedrock here" card, separate from the AI's interpretation.
   parsed.macrostrat = macrostratCtx || null;
