@@ -800,10 +800,83 @@ async function bedrock(request) {
   });
 }
 
+// ── Rate limiting ────────────────────────────────────────────────────
+// No Cloudflare Rate Limiting binding and no KV namespace is configured in
+// wrangler.jsonc, so this is a plain in-memory, per-isolate limiter — NOT a
+// global one. Cloudflare can (and under any real load, will) run multiple
+// isolates for the same Worker across edge locations, each with its own
+// independent counters here, so a client whose requests land on different
+// isolates can exceed the stated threshold. This blunts casual, single-colo
+// scripted abuse; it is not a hard cap. A real global guarantee needs a
+// Cloudflare Rate Limiting binding or a Workers KV-backed counter — neither
+// is wired up here.
+const rateLimitState = new Map(); // key -> { count, resetAt }
+let rateLimitCheckCount = 0;
+const RATE_LIMIT_SWEEP_EVERY = 500; // opportunistically evict expired entries
+
+function checkRateLimit(key, limit, windowMs) {
+  const now = Date.now();
+  if (++rateLimitCheckCount % RATE_LIMIT_SWEEP_EVERY === 0) {
+    for (const [k, v] of rateLimitState) {
+      if (v.resetAt <= now) rateLimitState.delete(k);
+    }
+  }
+  let entry = rateLimitState.get(key);
+  if (!entry || entry.resetAt <= now) {
+    entry = { count: 0, resetAt: now + windowMs };
+    rateLimitState.set(key, entry);
+  }
+  entry.count++;
+  return entry.count <= limit;
+}
+
+// CF-Connecting-IP is set by Cloudflare's edge; falls back to a shared
+// bucket under `wrangler dev` (no CF edge in front) or if ever absent.
+function clientIp(request) {
+  return request.headers.get('CF-Connecting-IP') || 'unknown';
+}
+
+// /api/identify makes a paid Claude Vision call every time — the most
+// expensive endpoint by far. Generous enough for normal use (a scan every
+// few seconds, including a low-confidence multi-photo follow-up) while
+// blunting scripted abuse.
+const IDENTIFY_RATE_LIMIT = 6;
+const IDENTIFY_RATE_WINDOW_MS = 10_000;
+
+// Journal writes are cheaper (D1 + optional R2 put) but still an open,
+// unauthenticated write path — throttle more loosely than identify.
+const WRITE_RATE_LIMIT = 20;
+const WRITE_RATE_WINDOW_MS = 10_000;
+
+function rateLimited(request, bucket, limit, windowMs) {
+  const key = `${bucket}:${clientIp(request)}`;
+  return !checkRateLimit(key, limit, windowMs);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const path = url.pathname;
+
+    // Rate-limited: /api/identify (paid Claude call) and the journal write
+    // endpoints (POST/PATCH/DELETE). Left open: GET /api/journal,
+    // /api/photos/*, /api/bedrock, /api/mindat*, /api/health and the SPA
+    // shell — all cheap reads/static content with no per-request external
+    // cost (see the README/PR notes for the full endpoint-by-endpoint
+    // rationale).
+    if (path === '/api/identify' && request.method === 'POST') {
+      if (rateLimited(request, 'identify', IDENTIFY_RATE_LIMIT, IDENTIFY_RATE_WINDOW_MS)) {
+        return json({ error: 'Too many requests, please slow down' }, 429);
+      }
+    }
+    const isJournalWrite =
+      (path === '/api/journal' && request.method === 'POST') ||
+      (/^\/api\/journal\/[a-zA-Z0-9-]+$/.test(path) && (request.method === 'PATCH' || request.method === 'DELETE'));
+    if (isJournalWrite) {
+      if (rateLimited(request, 'journal-write', WRITE_RATE_LIMIT, WRITE_RATE_WINDOW_MS)) {
+        return json({ error: 'Too many requests, please slow down' }, 429);
+      }
+    }
 
     if (path === '/api/identify') return identify(request, env);
     if (path === '/api/bedrock') return bedrock(request);
