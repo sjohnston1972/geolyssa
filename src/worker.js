@@ -376,6 +376,22 @@ async function identify(request, env) {
   }
 
   const payload = await anthropicRes.json();
+
+  // stop_reason === "max_tokens" means Claude was cut off mid-response —
+  // the text is truncated (and therefore invalid) JSON by construction.
+  // Detect this before attempting to parse so the client gets a clear,
+  // retryable explanation instead of the generic "non-JSON" error, which
+  // otherwise looks identical to a genuinely malformed model response.
+  if (payload?.stop_reason === 'max_tokens') {
+    console.error('Identify response truncated by max_tokens', {
+      length: payload?.content?.find(c => c.type === 'text')?.text?.length,
+    });
+    return json({
+      error: 'Identification response was cut off, please try again',
+      truncated: true,
+    }, 502);
+  }
+
   const text = payload?.content?.find(c => c.type === 'text')?.text || '';
   const cleaned = text.trim()
     .replace(/^```(?:json)?\s*/i, '')
