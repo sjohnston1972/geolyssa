@@ -28,5 +28,13 @@
       "database_name": "geolyssa",
       "database_id": "local"
     }
+  ],
+  // R2 binding matching env.PHOTOS (src/worker.js). `wrangler dev` uses a
+  // local simulated bucket automatically — no real bucket needed to iterate.
+  "r2_buckets": [
+    {
+      "binding": "PHOTOS",
+      "bucket_name": "geolyssa-photos"
+    }
   ]
 }
